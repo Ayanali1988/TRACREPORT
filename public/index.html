@@ -211,6 +211,134 @@ function rowVariance(budget, actual, kind) {
   return { variance, pct, favorable: variance >= 0 };
 }
 
+function computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays) {
+  const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+  const incomeVariance = rowVariance(totals.income_budget, totals.income_actual, 'income');
+  const directVariance = rowVariance(totals.direct_budget, totals.direct_actual, 'expense');
+  const netVariance = rowVariance(totals.netprofit_budget, totals.netprofit_actual, 'income');
+
+  let topRevenue = null;
+  (lineItems.revenue || []).forEach(item => {
+    const val = rangeMonths.reduce((s, p) => s + num(((monthlyData[p] || {})[item.key] || {}).actual), 0);
+    if (!topRevenue || val > topRevenue.value) topRevenue = { label: item.label, value: val };
+  });
+  const topRevenueSharePct = topRevenue && totals.income_actual ? topRevenue.value / totals.income_actual : null;
+
+  const occRows = vehicles.map(v => {
+    const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; }).filter(x => x !== null);
+    const avg = pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null;
+    return { vehicle: v, avg };
+  });
+  const withData = occRows.filter(r => r.avg !== null);
+  const fleetAvgOcc = withData.length ? withData.reduce((s, r) => s + r.avg, 0) / withData.length : 0;
+  const above50 = withData.filter(r => r.avg >= 0.5).length;
+
+  const modelGroups = {};
+  withData.forEach(r => {
+    const key = r.vehicle.name;
+    if (!modelGroups[key]) modelGroups[key] = { name: key, sum: 0, count: 0 };
+    modelGroups[key].sum += r.avg; modelGroups[key].count++;
+  });
+  const topModels = Object.values(modelGroups).map(g => ({ name: g.name, avg: g.sum / g.count, units: g.count }))
+    .sort((a, b) => b.avg - a.avg).slice(0, 3);
+
+  return { totals, incomeVariance, directVariance, netVariance, topRevenue, topRevenueSharePct, fleetAvgOcc, above50, totalWithData: withData.length, topModels };
+}
+
+function DonutGauge({ pct, size = 150, color = '#2D6E8E' }) {
+  const r = size / 2 - 13;
+  const c = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(1, pct));
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#EEEFEA" strokeWidth="14" />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth="14"
+        strokeDasharray={c} strokeDashoffset={c * (1 - clamped)} strokeLinecap="round"
+        transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" fontSize={size * 0.22} fontWeight="700" fill="#1D2330">{Math.round(pct * 100)}%</text>
+    </svg>
+  );
+}
+
+function vehicleUsefulLife(v, defaultUsefulLife) {
+  const override = num(v.usefulLifeOverride);
+  return override > 0 ? override : num(defaultUsefulLife) || 4;
+}
+function requiredMonthlyIncome(v, defaultUsefulLife) {
+  const life = vehicleUsefulLife(v, defaultUsefulLife);
+  const pv = num(v.purchaseValue);
+  return life > 0 ? pv / (life * 12) : 0;
+}
+function vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) {
+  let total = 0, monthsWithData = 0;
+  rangeMonths.forEach(p => {
+    const val = (vehicleRevenue[p] || {})[v.id];
+    if (val !== undefined && val !== '') { total += num(val); monthsWithData++; }
+  });
+  const avgMonthly = monthsWithData ? total / monthsWithData : 0;
+  const required = requiredMonthlyIncome(v, defaultUsefulLife);
+  const coverage = required > 0 ? avgMonthly / required : null;
+  let verdict = 'No Benchmark';
+  if (coverage !== null) verdict = coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
+  return { total, monthsWithData, avgMonthly, required, coverage, verdict, usefulLife: vehicleUsefulLife(v, defaultUsefulLife) };
+}
+
+/* ---------------- Feasibility Study calculations ---------------- */
+
+function calcEMI(principal, annualRatePct, termMonths) {
+  const r = (num(annualRatePct) / 100) / 12;
+  const n = num(termMonths);
+  const p = num(principal);
+  if (!p || !n) return 0;
+  if (!r) return p / n;
+  const factor = Math.pow(1 + r, n);
+  return p * r * factor / (factor - 1);
+}
+
+function emptyFeasibilityStudy() {
+  return {
+    id: uid('study'),
+    name: 'New Vehicle Study',
+    seatingCapacity: '',
+    totalPrice: '', downPayment: '',
+    usefulLifeYears: 3, workingDaysPerMonth: 22,
+    costLines: [
+      { id: uid('cl'), label: 'Bank Interest & Other Charges', note: '4.8%', annualAmount: '' },
+      { id: uid('cl'), label: 'Insurance', note: '5.0%', annualAmount: '' },
+      { id: uid('cl'), label: 'Tracker', note: '1', annualAmount: '' },
+      { id: uid('cl'), label: 'Repair & Maintenance', note: '1', annualAmount: '' },
+      { id: uid('cl'), label: 'Bank Charges', note: '1', annualAmount: '' },
+      { id: uid('cl'), label: 'Admin Expense', note: '10.0%', annualAmount: '' },
+    ],
+    profitPercent: 8,
+    marketDailyRate: '',
+    loanInterestRate: '', loanTermMonths: '',
+  };
+}
+
+function computeFeasibility(study) {
+  const netAmount = num(study.totalPrice) - num(study.downPayment);
+  const years = num(study.usefulLifeYears) || 1;
+  const months = years * 12;
+  const workingDaysMonth = num(study.workingDaysPerMonth) || 22;
+  const totalWorkingDays = workingDaysMonth * months;
+  const annualExpenseTotal = (study.costLines || []).reduce((s, c) => s + num(c.annualAmount), 0);
+  const lifeExpenseTotal = annualExpenseTotal * years;
+  const costBase = netAmount + lifeExpenseTotal;
+  const profitTotal = (num(study.profitPercent) / 100) * costBase * years;
+  const grandTotal = costBase + profitTotal;
+  const requiredDailyRate = totalWorkingDays ? grandTotal / totalWorkingDays : 0;
+  const emi = calcEMI(netAmount, study.loanInterestRate, num(study.loanTermMonths) || months);
+  const scenarios = [1, 0.75, 0.5].map(occ => {
+    const days = occ * workingDaysMonth;
+    return { occPct: occ, days, requiredAmount: days * requiredDailyRate, marketAmount: days * num(study.marketDailyRate) };
+  });
+  const marketRate = num(study.marketDailyRate);
+  const gapPct = requiredDailyRate ? (marketRate - requiredDailyRate) / requiredDailyRate : null;
+  const verdict = !marketRate ? 'No Market Rate Set' : marketRate >= requiredDailyRate ? 'Feasible' : (marketRate >= requiredDailyRate * 0.9 ? 'Marginal' : 'Not Feasible');
+  return { netAmount, months, workingDaysMonth, totalWorkingDays, annualExpenseTotal, lifeExpenseTotal, costBase, profitTotal, grandTotal, requiredDailyRate, emi, scenarios, gapPct, verdict };
+}
+
 function confirmDelete(label, deletePin) {
   if (!window.confirm('Delete "' + label + '"? This cannot be undone.')) return false;
   if (deletePin) {
@@ -295,6 +423,9 @@ function App() {
   const [monthlyData, setMonthlyData] = useState({});
   const [vehicles, setVehicles] = useState([]);
   const [occupancy, setOccupancy] = useState({});
+  const [vehicleRevenue, setVehicleRevenue] = useState({});
+  const [defaultUsefulLife, setDefaultUsefulLife] = useState(4);
+  const [feasibilityStudies, setFeasibilityStudies] = useState([]);
 
   const [reportFrom, setReportFrom] = useState(year + '-01');
   const [reportTo, setReportTo] = useState(year + '-12');
@@ -327,6 +458,9 @@ function App() {
         if (data.monthlyData) setMonthlyData(data.monthlyData);
         if (data.vehicles) setVehicles(data.vehicles);
         if (data.occupancy) setOccupancy(data.occupancy);
+        if (data.vehicleRevenue) setVehicleRevenue(data.vehicleRevenue);
+        if (data.defaultUsefulLife) setDefaultUsefulLife(data.defaultUsefulLife);
+        if (data.feasibilityStudies) setFeasibilityStudies(data.feasibilityStudies);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
       }
@@ -347,17 +481,17 @@ function App() {
   useEffect(() => {
     if (!loaded || !authed) return;
     const t = setTimeout(() => {
-      apiCall('POST', { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo })
+      apiCall('POST', { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo })
         .catch(e => console.error('save failed', e));
     }, 500);
     return () => clearTimeout(t);
-  }, [companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo, loaded, authed]);
+  }, [companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo, loaded, authed]);
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
 
   function downloadBackup() {
-    const state = { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo, backupDate: new Date().toISOString() };
+    const state = { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo, backupDate: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -382,6 +516,9 @@ function App() {
         if (data.monthlyData) setMonthlyData(data.monthlyData);
         if (data.vehicles) setVehicles(data.vehicles);
         if (data.occupancy) setOccupancy(data.occupancy);
+        if (data.vehicleRevenue) setVehicleRevenue(data.vehicleRevenue);
+        if (data.defaultUsefulLife) setDefaultUsefulLife(data.defaultUsefulLife);
+        if (data.feasibilityStudies) setFeasibilityStudies(data.feasibilityStudies);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
         window.alert('Backup restored successfully.');
@@ -455,6 +592,22 @@ function App() {
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Bucket', 'Vehicle Count'], ...Object.entries(buckets)]), 'Occupancy Distribution');
 
+    const roiRows = [['Model', 'Plate', 'Purchase Value', 'Useful Life (yrs)', 'Avg Monthly Income', 'Required Monthly Income', 'Coverage %', 'Verdict']];
+    vehicles.forEach(v => {
+      const s = vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife);
+      roiRows.push([v.name, v.plate, num(v.purchaseValue), s.usefulLife, Math.round(s.avgMonthly), Math.round(s.required), s.coverage === null ? '' : (s.coverage * 100).toFixed(0) + '%', s.verdict]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(roiRows), 'Vehicle ROI');
+
+    if (feasibilityStudies.length) {
+      const feasRows = [['Study', 'Total Price', 'Down Payment', 'Net Amount', 'Useful Life (yrs)', 'Working Days/Month', 'Total Annual Expenses', 'Total Cost + Expenses', 'Target Profit %', 'Profit (life)', 'Grand Total', 'Required Daily Rate', 'Market Daily Rate', 'Monthly EMI', 'Verdict']];
+      feasibilityStudies.forEach(s => {
+        const fc = computeFeasibility(s);
+        feasRows.push([s.name, num(s.totalPrice), num(s.downPayment), fc.netAmount, s.usefulLifeYears, s.workingDaysPerMonth, Math.round(fc.annualExpenseTotal), Math.round(fc.costBase), s.profitPercent, Math.round(fc.profitTotal), Math.round(fc.grandTotal), Math.round(fc.requiredDailyRate), num(s.marketDailyRate), Math.round(fc.emi), fc.verdict]);
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(feasRows), 'Feasibility Studies');
+    }
+
     XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-fleet-report-${reportFrom}_to_${reportTo}.xlsx`);
   }
 
@@ -480,10 +633,14 @@ function App() {
         <div className="brand">🚗 <span>FleetIQ</span></div>
         <nav>
           <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>
+          <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
           <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
           <button className={`navbtn ${activeTab === 'occ-entry' ? 'active' : ''}`} onClick={() => setActiveTab('occ-entry')}>⏱ Occupancy Entry</button>
           <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
           <button className={`navbtn ${activeTab === 'vehicles' ? 'active' : ''}`} onClick={() => setActiveTab('vehicles')}>🚙 Vehicles</button>
+          <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>
+          <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
+          <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>
           <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
           <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
         </nav>
@@ -508,10 +665,14 @@ function App() {
 
         <div className="main-scroll">
           {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />}
           {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
           {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
-          {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} />}
+          {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} currency={currency} />}
+          {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
+          {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
+          {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
@@ -797,18 +958,333 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
   );
 }
 
-/* ---------------- Vehicles ---------------- */
+/* ---------------- Vehicle Revenue Entry ---------------- */
 
-function VehiclesPanel({ vehicles, setVehicles, deletePin }) {
-  const [form, setForm] = useState({ name: '', plate: '' });
-  const [bulkText, setBulkText] = useState('');
+function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenue, currency }) {
+  const [period, setPeriod] = useState(monthKeys[0]);
   const [search, setSearch] = useState('');
 
-  function addVehicle() { if (!form.name.trim()) return; setVehicles([...vehicles, { id: uid('veh'), ...form }]); setForm({ name: '', plate: '' }); }
+  function setAmount(vehicleId, value) { setVehicleRevenue(prev => ({ ...prev, [period]: { ...(prev[period] || {}), [vehicleId]: value } })); }
+  const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
+
+  if (vehicles.length === 0) return <div className="empty-state"><h2>Add vehicles first</h2><p>Go to the Vehicles tab to add your fleet, including purchase value.</p></div>;
+
+  return (
+    <div className="panel">
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>Enter each vehicle's own rental income for the month — this feeds the Model Comparison &amp; ROI report. This is separate from the company-wide P&amp;L totals.</p>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+        <div className="field" style={{ maxWidth: 200 }}><label>Month (any year)</label><input type="month" value={period} onChange={e => setPeriod(e.target.value)} /></div>
+        <div className="field" style={{ maxWidth: 260 }}><label>Search</label><input placeholder="Filter vehicles…" value={search} onChange={e => setSearch(e.target.value)} /></div>
+      </div>
+      <table>
+        <thead><tr><th>Model / Name</th><th>Plate</th><th className="num">Income This Month ({currency})</th></tr></thead>
+        <tbody>
+          {filtered.map(v => {
+            const val = (vehicleRevenue[period] || {})[v.id];
+            return (
+              <tr key={v.id}>
+                <td>{v.name}</td><td>{v.plate}</td>
+                <td className="num"><input type="number" value={val === undefined ? '' : val} onChange={e => setAmount(v.id, e.target.value)} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ---------------- Model Comparison & ROI ---------------- */
+
+function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency }) {
+  const unitStats = useMemo(() => vehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }))
+    .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife]);
+
+  const modelGroups = useMemo(() => {
+    const groups = {};
+    unitStats.forEach(({ vehicle, stats }) => {
+      if (!groups[vehicle.name]) groups[vehicle.name] = { name: vehicle.name, units: 0, totalPurchaseValue: 0, totalIncome: 0, sumAvgMonthly: 0, sumRequired: 0, withBenchmark: 0 };
+      const g = groups[vehicle.name];
+      g.units++;
+      g.totalPurchaseValue += num(vehicle.purchaseValue);
+      g.totalIncome += stats.total;
+      g.sumAvgMonthly += stats.avgMonthly;
+      if (stats.required > 0) { g.sumRequired += stats.required; g.withBenchmark++; }
+    });
+    return Object.values(groups).map(g => {
+      const avgMonthlyPerUnit = g.units ? g.sumAvgMonthly / g.units : 0;
+      const avgRequiredPerUnit = g.withBenchmark ? g.sumRequired / g.withBenchmark : 0;
+      const coverage = avgRequiredPerUnit > 0 ? avgMonthlyPerUnit / avgRequiredPerUnit : null;
+      const verdict = coverage === null ? 'No Benchmark' : coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
+      return { ...g, avgMonthlyPerUnit, avgRequiredPerUnit, coverage, verdict };
+    }).sort((a, b) => (b.coverage ?? -1) - (a.coverage ?? -1));
+  }, [unitStats]);
+
+  const verdictColor = (v) => v === 'Good' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Underperforming' ? '#C1503F' : '#6B7380';
+
+  if (vehicles.length === 0) return <div className="empty-state"><h2>No vehicles yet</h2><p>Add vehicles with a purchase value in the Vehicles tab, then log monthly income in Vehicle Revenue Entry.</p></div>;
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Useful Life Assumption</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Applied to every vehicle unless it has its own Useful Life Override set in the Vehicles tab. Required monthly income = Purchase Value ÷ (Useful Life × 12).</p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {[3, 4, 5].map(n => (
+            <div key={n} className={`chip ${Number(defaultUsefulLife) === n ? 'selected' : ''}`} onClick={() => setDefaultUsefulLife(n)}>{n} years</div>
+          ))}
+          <input type="number" min="1" value={defaultUsefulLife} onChange={e => setDefaultUsefulLife(Math.max(1, num(e.target.value) || 4))} style={{ width: 70, border: '1px solid var(--line)', borderRadius: 6, padding: '5px 8px' }} />
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>years (custom)</span>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Avg Monthly Income vs Required — by Model</h3>
+        <GroupedBarChart data={modelGroups.map(g => ({ label: g.name, avgMonthlyPerUnit: g.avgMonthlyPerUnit, avgRequiredPerUnit: g.avgRequiredPerUnit }))}
+          series={[{ key: 'avgRequiredPerUnit', label: 'Required / Unit', color: '#D9C8B9' }, { key: 'avgMonthlyPerUnit', label: 'Actual / Unit', color: '#2D6E8E' }]} />
+      </div>
+
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Model-Level Summary</h3>
+        <table>
+          <thead><tr><th>Model</th><th className="num">Units</th><th className="num">Total Purchase Value</th><th className="num">Total Income (range)</th><th className="num">Avg Income / Unit / Month</th><th className="num">Required / Unit / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
+          <tbody>
+            {modelGroups.map(g => (
+              <tr key={g.name}>
+                <td>{g.name}</td>
+                <td className="num">{g.units}</td>
+                <td className="num">{fmt(g.totalPurchaseValue, currency)}</td>
+                <td className="num">{fmt(g.totalIncome, currency)}</td>
+                <td className="num">{fmt(g.avgMonthlyPerUnit, currency)}</td>
+                <td className="num">{g.avgRequiredPerUnit ? fmt(g.avgRequiredPerUnit, currency) : '—'}</td>
+                <td className="num">{g.coverage === null ? '—' : pctStr(g.coverage)}</td>
+                <td><span className="badge" style={{ background: verdictColor(g.verdict) + '20', color: verdictColor(g.verdict) }}>{g.verdict}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Per-Vehicle Detail (grouped by model)</h3>
+        <table>
+          <thead><tr><th>Model</th><th>Plate</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th className="num">Avg Monthly Income</th><th className="num">Required / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
+          <tbody>
+            {unitStats.map(({ vehicle, stats }) => (
+              <tr key={vehicle.id}>
+                <td>{vehicle.name}</td><td>{vehicle.plate}</td>
+                <td className="num">{vehicle.purchaseValue ? fmt(vehicle.purchaseValue, currency) : '—'}</td>
+                <td className="num">{stats.usefulLife} yrs</td>
+                <td className="num">{fmt(stats.avgMonthly, currency)}</td>
+                <td className="num">{stats.required ? fmt(stats.required, currency) : '—'}</td>
+                <td className="num">{stats.coverage === null ? '—' : pctStr(stats.coverage)}</td>
+                <td><span className="badge" style={{ background: verdictColor(stats.verdict) + '20', color: verdictColor(stats.verdict) }}>{stats.verdict}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Feasibility Study ---------------- */
+
+function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWorkingDays }) {
+  const [selectedId, setSelectedId] = useState(studies[0] ? studies[0].id : null);
+
+  function addStudy() {
+    const s = emptyFeasibilityStudy();
+    s.workingDaysPerMonth = defaultWorkingDays || 22;
+    setStudies([...studies, s]);
+    setSelectedId(s.id);
+  }
+  function duplicateStudy(study) {
+    const copy = { ...study, id: uid('study'), name: study.name + ' (copy)', costLines: study.costLines.map(c => ({ ...c, id: uid('cl') })) };
+    setStudies([...studies, copy]);
+    setSelectedId(copy.id);
+  }
+  function deleteStudy(study) {
+    if (!confirmDelete(study.name, deletePin)) return;
+    setStudies(studies.filter(s => s.id !== study.id));
+    if (selectedId === study.id) setSelectedId(null);
+  }
+  function updateStudy(id, patch) {
+    setStudies(studies.map(s => s.id === id ? { ...s, ...patch } : s));
+  }
+
+  const selected = studies.find(s => s.id === selectedId);
+  const verdictColor = (v) => v === 'Feasible' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Not Feasible' ? '#C1503F' : '#6B7380';
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Saved Feasibility Studies</h3>
+          <button className="btn primary" onClick={addStudy}>+ New Study</button>
+        </div>
+        {studies.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>Run this before buying a vehicle — model out the total cost, target profit, and required daily rate, then compare it against the real market rate to see if it's worth buying.</p>
+        ) : (
+          <table>
+            <thead><tr><th>Study</th><th className="num">Total Price</th><th className="num">Required Daily Rate</th><th className="num">Market Rate</th><th>Verdict</th><th></th></tr></thead>
+            <tbody>
+              {studies.map(s => {
+                const c = computeFeasibility(s);
+                return (
+                  <tr key={s.id} style={{ background: s.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(s.id)}>
+                    <td>{s.name}</td>
+                    <td className="num">{s.totalPrice ? fmt(s.totalPrice, currency) : '—'}</td>
+                    <td className="num">{fmt(c.requiredDailyRate, currency)}</td>
+                    <td className="num">{s.marketDailyRate ? fmt(s.marketDailyRate, currency) : '—'}</td>
+                    <td><span className="badge" style={{ background: verdictColor(c.verdict) + '20', color: verdictColor(c.verdict) }}>{c.verdict}</span></td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="icon-btn" onClick={e => { e.stopPropagation(); duplicateStudy(s); }}>⧉</button>{' '}
+                      <button className="icon-btn" onClick={e => { e.stopPropagation(); deleteStudy(s); }}>✕</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && <FeasibilityDetail study={selected} onChange={patch => updateStudy(selected.id, patch)} currency={currency} />}
+    </div>
+  );
+}
+
+function FeasibilityDetail({ study, onChange, currency }) {
+  const c = computeFeasibility(study);
+  const verdictColor = (v) => v === 'Feasible' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Not Feasible' ? '#C1503F' : '#6B7380';
+
+  function updateCostLine(id, field, value) {
+    onChange({ costLines: study.costLines.map(cl => cl.id === id ? { ...cl, [field]: value } : cl) });
+  }
+  function addCostLine() {
+    onChange({ costLines: [...study.costLines, { id: uid('cl'), label: 'New Cost', note: '', annualAmount: '' }] });
+  }
+  function removeCostLine(id) {
+    onChange({ costLines: study.costLines.filter(cl => cl.id !== id) });
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Vehicle Details</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 200px' }}><label>Study Name / Vehicle</label><input value={study.name} onChange={e => onChange({ name: e.target.value })} placeholder="Nissan Patrol" /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Seating Capacity</label><input value={study.seatingCapacity} onChange={e => onChange({ seatingCapacity: e.target.value })} placeholder="1 + 7" /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Total Price ({currency})</label><input type="number" value={study.totalPrice} onChange={e => onChange({ totalPrice: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Down Payment ({currency})</label><input type="number" value={study.downPayment} onChange={e => onChange({ downPayment: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 120px' }}><label>Net Amount</label><input disabled value={fmt(c.netAmount, currency)} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Useful Life (Years)</label><input type="number" value={study.usefulLifeYears} onChange={e => onChange({ usefulLifeYears: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Working Days / Month</label><input type="number" value={study.workingDaysPerMonth} onChange={e => onChange({ workingDaysPerMonth: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Total Working Days (life)</label><input disabled value={c.totalWorkingDays.toLocaleString()} /></div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Other Costs (annual)</h3>
+        <table>
+          <thead><tr><th>Label</th><th>Note / Rate</th><th className="num">Annual Amount ({currency})</th><th className="num">Total over Life</th><th></th></tr></thead>
+          <tbody>
+            {study.costLines.map(cl => (
+              <tr key={cl.id}>
+                <td><input value={cl.label} onChange={e => updateCostLine(cl.id, 'label', e.target.value)} style={{ width: 180 }} /></td>
+                <td><input value={cl.note} onChange={e => updateCostLine(cl.id, 'note', e.target.value)} placeholder="e.g. 4.8% or 1" style={{ width: 90 }} /></td>
+                <td className="num"><input type="number" value={cl.annualAmount} onChange={e => updateCostLine(cl.id, 'annualAmount', e.target.value)} /></td>
+                <td className="num">{fmt(num(cl.annualAmount) * (num(study.usefulLifeYears) || 1), currency)}</td>
+                <td><button className="icon-btn" onClick={() => removeCostLine(cl.id)}>✕</button></td>
+              </tr>
+            ))}
+            <tr className="subtotal-row">
+              <td colSpan={2}>Total Expenses</td>
+              <td className="num">{fmt(c.annualExpenseTotal, currency)}</td>
+              <td className="num">{fmt(c.lifeExpenseTotal, currency)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+        <button className="btn small" style={{ marginTop: 8 }} onClick={addCostLine}>+ Add Cost Line</button>
+      </div>
+
+      <div className="panel">
+        <h3>Profit Target &amp; Pricing</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Target Profit % / Year</label><input type="number" value={study.profitPercent} onChange={e => onChange({ profitPercent: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Market Daily Rate ({currency})</label><input type="number" value={study.marketDailyRate} onChange={e => onChange({ marketDailyRate: e.target.value })} placeholder="what competitors charge" /></div>
+        </div>
+        <div className="kpi-row" style={{ marginTop: 14 }}>
+          <div className="kpi-card"><div className="label">Total Cost + Expenses</div><div className="value mono">{fmt(c.costBase, currency)}</div></div>
+          <div className="kpi-card"><div className="label">Profit Target (life)</div><div className="value mono">{fmt(c.profitTotal, currency)}</div></div>
+          <div className="kpi-card"><div className="label">Grand Total (Required Revenue)</div><div className="value mono">{fmt(c.grandTotal, currency)}</div></div>
+          <div className="kpi-card"><div className="label">Required Daily Rate</div><div className="value mono">{fmt(c.requiredDailyRate, currency)}</div></div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <span className="badge" style={{ background: verdictColor(c.verdict) + '20', color: verdictColor(c.verdict), fontSize: 13, padding: '5px 12px' }}>
+            {c.verdict}{c.gapPct !== null ? ` (market rate is ${pctStr(c.gapPct)} vs required)` : ''}
+          </span>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Loan EMI (optional)</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Loan Interest Rate % / Year</label><input type="number" value={study.loanInterestRate} onChange={e => onChange({ loanInterestRate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Loan Term (months, blank = useful life)</label><input type="number" value={study.loanTermMonths} onChange={e => onChange({ loanTermMonths: e.target.value })} placeholder={c.months} /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Monthly EMI</label><input disabled value={fmt(c.emi, currency)} /></div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Occupancy Scenarios</h3>
+        <table>
+          <thead><tr><th>Occupancy</th><th className="num">Days / Month</th><th className="num">Required Monthly Income</th><th className="num">At Market Rate</th></tr></thead>
+          <tbody>
+            {c.scenarios.map((s, i) => (
+              <tr key={i}>
+                <td>{(s.occPct * 100).toFixed(0)}%</td>
+                <td className="num">{s.days}</td>
+                <td className="num">{fmt(s.requiredAmount, currency)}</td>
+                <td className="num">{study.marketDailyRate ? fmt(s.marketAmount, currency) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Vehicles ---------------- */
+
+function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
+  const [form, setForm] = useState({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' });
+  const [bulkText, setBulkText] = useState('');
+  const [search, setSearch] = useState('');
+  const [editId, setEditId] = useState(null);
+
+  function addVehicle() {
+    if (!form.name.trim()) return;
+    if (editId) {
+      setVehicles(vehicles.map(v => v.id === editId ? { ...v, ...form } : v));
+      setEditId(null);
+    } else {
+      setVehicles([...vehicles, { id: uid('veh'), ...form }]);
+    }
+    setForm({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' });
+  }
+  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '' }; });
+    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', purchaseValue: parts[2] || '' }; });
     setVehicles([...vehicles, ...nv]); setBulkText('');
   }
   const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
@@ -816,17 +1292,22 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin }) {
   return (
     <div>
       <div className="panel">
-        <h3>Add Vehicle</h3>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <div className="field" style={{ flex: 1 }}><label>Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Patrol" /></div>
-          <div className="field" style={{ flex: 1 }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
+        <h3>{editId ? 'Edit Vehicle' : 'Add Vehicle'}</h3>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Model / Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Sunny" /></div>
+          <div className="field" style={{ flex: '1 1 120px' }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={form.purchaseValue} onChange={e => setForm({ ...form, purchaseValue: e.target.value })} placeholder="50000" /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses default" /></div>
         </div>
-        <button className="btn primary" style={{ marginTop: 10 }} onClick={addVehicle}>+ Add Vehicle</button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button className="btn primary" onClick={addVehicle}>{editId ? 'Update Vehicle' : '+ Add Vehicle'}</button>
+          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
+        </div>
       </div>
       <div className="panel">
         <h3>Bulk Add</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate</code></p>
-        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Patrol, 9182-G\nGMC Yukon, 9185-G"} />
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate, Purchase Value (optional)</code></p>
+        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Sunny, 9182-G, 45000\nGMC Yukon, 9185-G, 120000"} />
         <button className="btn primary" style={{ marginTop: 10 }} onClick={bulkAdd}>+ Add All</button>
       </div>
       <div className="panel">
@@ -835,10 +1316,20 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>Name</th><th>Plate</th><th></th></tr></thead>
+          <thead><tr><th>Model / Name</th><th>Plate</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
-            {filtered.map(v => <tr key={v.id}><td>{v.name}</td><td>{v.plate}</td><td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={() => deleteVehicle(v)}>✕</button></td></tr>)}
-            {filtered.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
+            {filtered.map(v => (
+              <tr key={v.id}>
+                <td>{v.name}</td><td>{v.plate}</td>
+                <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString() : '—'}</td>
+                <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : 'default'}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button className="icon-btn" onClick={() => editVehicle(v)}>✎</button>{' '}
+                  <button className="icon-btn" onClick={() => deleteVehicle(v)}>✕</button>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1135,6 +1626,92 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
   );
 }
 
+/* ---------------- Quick Review (executive one-page summary) ---------------- */
+
+function QuickReviewPanel({ companyName, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+  const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
+  const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
+
+  if (rangeMonths.length === 0) return <div className="empty-state"><h2>No period selected</h2><p>Pick a Report From / Report To range at the top of the app.</p></div>;
+
+  return (
+    <div>
+      <div className="panel" style={{ background: 'linear-gradient(135deg,#161B26,#2D6E8E)', border: 'none' }}>
+        <h1 style={{ fontSize: 20, color: '#fff', margin: 0 }}>{companyName}</h1>
+        <p style={{ color: 'rgba(255,255,255,0.75)', margin: '4px 0 0 0', fontSize: 13 }}>{periodLabel} Performance Dashboard</p>
+      </div>
+
+      <div className="kpi-row">
+        <div className="kpi-card" style={{ borderLeft: '4px solid ' + (qr.totals.netprofit_actual >= 0 ? '#3E9C6E' : '#C1503F') }}>
+          <div className="label">Net Profit / Loss</div>
+          <div className="value mono" style={{ fontSize: 24, color: qr.totals.netprofit_actual >= 0 ? '#3E9C6E' : '#C1503F' }}>{fmt(qr.totals.netprofit_actual, currency)}</div>
+          <div className="sub" style={{ color: 'var(--muted)' }}>vs budget {fmt(qr.totals.netprofit_budget, currency)}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="label">Total Income</div>
+          <div className="value mono" style={{ fontSize: 22 }}>{fmt(qr.totals.income_actual, currency)}</div>
+          <div className={`sub ${qr.incomeVariance.favorable ? 'pos' : 'neg'}`}>{qr.incomeVariance.pct === null ? '—' : pctStr(qr.incomeVariance.pct)} vs budget</div>
+        </div>
+        <div className="kpi-card">
+          <div className="label">Avg Fleet Occupancy</div>
+          <div className="value mono" style={{ fontSize: 22 }}>{pctStr(qr.fleetAvgOcc)}</div>
+          <div className="sub" style={{ color: 'var(--muted)' }}>{qr.above50}/{qr.totalWithData} vehicles above 50%</div>
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="panel">
+          <h3>Budget vs Actual</h3>
+          <table>
+            <thead><tr><th>Category</th><th className="num">Budget</th><th className="num">Actual</th><th>Variance</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Total Income</td><td className="num">{fmt(qr.totals.income_budget, currency)}</td><td className="num">{fmt(qr.totals.income_actual, currency)}</td>
+                <td><span className={`badge ${qr.incomeVariance.favorable ? 'pos' : 'neg'}`}>{qr.incomeVariance.pct === null ? '—' : pctStr(qr.incomeVariance.pct)} {qr.incomeVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
+              </tr>
+              <tr>
+                <td>Direct Expenses</td><td className="num">{fmt(qr.totals.direct_budget, currency)}</td><td className="num">{fmt(qr.totals.direct_actual, currency)}</td>
+                <td><span className={`badge ${qr.directVariance.favorable ? 'pos' : 'neg'}`}>{qr.directVariance.pct === null ? '—' : pctStr(qr.directVariance.pct)} {qr.directVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
+              </tr>
+              <tr className="net-row">
+                <td>Net Profit / Loss</td><td className="num">{fmt(qr.totals.netprofit_budget, currency)}</td><td className="num">{fmt(qr.totals.netprofit_actual, currency)}</td>
+                <td><span className={`badge ${qr.netVariance.favorable ? 'pos' : 'neg'}`}>{qr.netVariance.pct === null ? '—' : pctStr(qr.netVariance.pct)} {qr.netVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
+              </tr>
+            </tbody>
+          </table>
+          {qr.topRevenue && qr.topRevenue.value > 0 && (
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 12 }}>
+              <b>{qr.topRevenue.label}</b> was the largest income contributor this period at {pctStr(qr.topRevenueSharePct)} of total income{qr.netVariance.favorable ? ' — a key driver of the favorable variance.' : '.'}
+            </p>
+          )}
+        </div>
+        <div className="panel" style={{ textAlign: 'center' }}>
+          <h3>Fleet Occupancy</h3>
+          <DonutGauge pct={qr.fleetAvgOcc} color={qr.fleetAvgOcc >= 0.5 ? '#3E9C6E' : '#C1503F'} />
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>{qr.totalWithData} vehicles with logged data this period</p>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Top Performing Models</h3>
+        {qr.topModels.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>No occupancy data logged for this period yet.</p>
+        ) : (
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {qr.topModels.map((m, i) => (
+              <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 16px', minWidth: 160 }}>
+                <div style={{ fontWeight: 700 }}>{m.name}</div>
+                <div className="mono" style={{ fontSize: 20, color: m.avg >= 0.5 ? '#3E9C6E' : '#C1503F' }}>{pctStr(m.avg)}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>avg occupancy · {m.units} unit{m.units > 1 ? 's' : ''}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Full printable report ---------------- */
 
 function FullReport({ companyName, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
@@ -1149,6 +1726,8 @@ function FullReport({ companyName, currency, rangeMonths, lineItems, monthlyData
 
   return (
     <div style={{ padding: 24 }}>
+      <QuickReviewPanel companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+      <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h1 style={{ fontSize: 22 }}>{companyName}</h1>
       <p style={{ color: 'var(--muted)', marginTop: 4 }}>Budget vs Actual &amp; Occupancy Report · {rangeMonths.map(monthLabel).join(' – ')}</p>
 
