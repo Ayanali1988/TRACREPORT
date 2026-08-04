@@ -1923,7 +1923,11 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
                       <td className="num"><input type="number" value={r.interest} onChange={e => updateRow(r.id, 'interest', e.target.value)} /></td>
                       <td className="num">{fmt(num(r.principal) + num(r.interest), currency)}</td>
                       <td><input type="checkbox" checked={r.paid} onChange={() => togglePaid(r.id)} /></td>
-                      <td>{r.paid ? r.paidDate : '—'}</td>
+                      <td>
+                        {r.paid ? (
+                          <input type="date" value={r.paidDate && r.paidDate.length === 7 ? r.paidDate + '-01' : r.paidDate} onChange={e => updateRow(r.id, 'paidDate', e.target.value)} style={{ width: 130 }} />
+                        ) : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
