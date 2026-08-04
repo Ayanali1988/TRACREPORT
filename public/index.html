@@ -78,6 +78,7 @@
   .login-box { background:#fff; border-radius:12px; padding:34px; width:340px; text-align:center; }
   .login-box input { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 12px; font-size:14px; margin:14px 0; box-sizing:border-box; }
   .print-only { display:none; }
+  @page { size: landscape; margin: 12mm; }
   @media print {
     .no-print { display:none !important; }
     .print-only { display:block !important; }
@@ -211,6 +212,84 @@ function rowVariance(budget, actual, kind) {
   return { variance, pct, favorable: variance >= 0 };
 }
 
+/* ---------------- Excel row builders (shared by contextual + cumulative export) ---------------- */
+
+function buildPnlDetailRows(rangeMonths, lineItems, monthlyData) {
+  const detailHeader = ['Particulars', ...rangeMonths.flatMap(p => [monthLabel(p) + ' Budget', monthLabel(p) + ' Actual'])];
+  const detailRows = [detailHeader];
+  const pushSection = (sec, subtotalLabel, subtotalKey) => {
+    lineItems[sec].forEach(item => {
+      detailRows.push([item.label, ...rangeMonths.flatMap(p => {
+        const md = (monthlyData[p] || {})[item.key] || {};
+        return [num(md.budget), num(md.actual)];
+      })]);
+    });
+    if (subtotalLabel) detailRows.push([subtotalLabel, ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c[subtotalKey + '_budget'], c[subtotalKey + '_actual']]; })]);
+  };
+  pushSection('revenue', 'Total Income', 'income');
+  pushSection('direct', 'Total Direct Expenses', 'direct');
+  detailRows.push(['Gross Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.gross_budget, c.gross_actual]; })]);
+  pushSection('indirect', 'Total Indirect Expenses', 'indirect');
+  detailRows.push(['EBITDA', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.ebitda_budget, c.ebitda_actual]; })]);
+  pushSection('interest', 'Total Interest & Bank Charges', 'interest');
+  pushSection('belowLine', null, null);
+  detailRows.push(['Net Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.netprofit_budget, c.netprofit_actual]; })]);
+  return detailRows;
+}
+
+function buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays) {
+  const occRows = [['Car', 'Plate', ...rangeMonths.map(monthLabel), 'AVG %', 'Remarks']];
+  vehicles.forEach(v => {
+    const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
+    const valid = pcts.filter(x => x !== null);
+    const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+    occRows.push([v.name, v.plate, ...pcts.map(p => p === null ? '' : (p * 100).toFixed(0) + '%'), avg === null ? '' : (avg * 100).toFixed(0) + '%', avg === null ? '' : (avg >= 0.5 ? 'OK' : 'Workout')]);
+  });
+  return occRows;
+}
+
+function buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays) {
+  const buckets = { '0-30%': 0, '31-50%': 0, '51-75%': 0, '76-100%+': 0 };
+  vehicles.forEach(v => {
+    const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; }).filter(x => x !== null);
+    if (!pcts.length) return;
+    const avg = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+    if (avg < 0.3) buckets['0-30%']++; else if (avg < 0.5) buckets['31-50%']++; else if (avg < 0.75) buckets['51-75%']++; else buckets['76-100%+']++;
+  });
+  return [['Bucket', 'Vehicle Count'], ...Object.entries(buckets)];
+}
+
+function buildRoiRows(vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife) {
+  const roiRows = [['Model', 'Plate', 'Purchase Value', 'Useful Life (yrs)', 'Avg Monthly Income', 'Required Monthly Income', 'Coverage %', 'Verdict']];
+  vehicles.forEach(v => {
+    const s = vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife);
+    roiRows.push([v.name, v.plate, num(v.purchaseValue), s.usefulLife, Math.round(s.avgMonthly), Math.round(s.required), s.coverage === null ? '' : (s.coverage * 100).toFixed(0) + '%', s.verdict]);
+  });
+  return roiRows;
+}
+
+function buildFeasibilityRows(feasibilityStudies) {
+  const feasRows = [['Study', 'Total Price', 'Down Payment', 'Net Amount', 'Useful Life (yrs)', 'Working Days/Month', 'Total Annual Expenses', 'Total Cost + Expenses', 'Target Profit %', 'Profit (life)', 'Grand Total', 'Required Daily Rate', 'Market Daily Rate', 'Monthly EMI', 'Verdict']];
+  feasibilityStudies.forEach(s => {
+    const fc = computeFeasibility(s);
+    feasRows.push([s.name, num(s.totalPrice), num(s.downPayment), fc.netAmount, s.usefulLifeYears, s.workingDaysPerMonth, Math.round(fc.annualExpenseTotal), Math.round(fc.costBase), s.profitPercent, Math.round(fc.profitTotal), Math.round(fc.grandTotal), Math.round(fc.requiredDailyRate), num(s.marketDailyRate), Math.round(fc.emi), fc.verdict]);
+  });
+  return feasRows;
+}
+
+function buildLoanRows(loans) {
+  const summaryRows = [['Vehicle', 'Lender', 'Car Value', 'Down Payment', 'Loan Amount', 'Interest Rate %', 'Term (months)', 'Start Date', 'Monthly EMI', 'Principal Balance', 'Interest Balance', 'Payoff Date']];
+  const scheduleRows = [['Vehicle', 'Installment #', 'Due Date', 'Principal', 'Interest', 'Total', 'Paid', 'Paid Date']];
+  loans.forEach(l => {
+    const s = loanStats(l);
+    summaryRows.push([l.modelName, l.lender, num(l.carValue), num(l.downPayment), loanAmount(l), l.interestRate, loanTermMonths(l), l.startDate, Math.round(s.monthlyEMI), Math.round(s.balancePrincipal), Math.round(s.balanceInterest), s.payoffDate || '']);
+    (l.schedule || []).forEach(r => {
+      scheduleRows.push([l.modelName, r.number, r.dueDate, r.principal, r.interest, num(r.principal) + num(r.interest), r.paid ? 'Yes' : 'No', r.paidDate || '']);
+    });
+  });
+  return { summaryRows, scheduleRows };
+}
+
 function computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays) {
   const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
   const incomeVariance = rowVariance(totals.income_budget, totals.income_actual, 'income');
@@ -293,6 +372,95 @@ function calcEMI(principal, annualRatePct, termMonths) {
   if (!r) return p / n;
   const factor = Math.pow(1 + r, n);
   return p * r * factor / (factor - 1);
+}
+
+/* ---------------- Vehicle Financing ---------------- */
+
+function addMonths(period, delta) {
+  let [y, m] = period.split('-').map(Number);
+  m += delta;
+  while (m > 12) { m -= 12; y++; }
+  while (m < 1) { m += 12; y--; }
+  return y + '-' + String(m).padStart(2, '0');
+}
+
+function parseFlexibleDate(str) {
+  str = String(str || '').trim();
+  if (/^\d{4}-\d{2}$/.test(str)) return str;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str.slice(0, 7);
+  const m = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/); // DD/MM/YYYY
+  if (m) return m[3] + '-' + m[2].padStart(2, '0');
+  return str;
+}
+
+function emptyLoan() {
+  return {
+    id: uid('loan'),
+    vehicleId: '', modelName: '', lender: '',
+    carValue: '', downPayment: '', processingFee: '', includeFeeInLoan: false,
+    interestRate: '', termUnit: 'months', termValue: 36,
+    startDate: new Date().toISOString().slice(0, 7),
+    schedule: [], deferments: [],
+  };
+}
+
+function loanAmount(loan) {
+  return Math.max(0, num(loan.carValue) - num(loan.downPayment) + (loan.includeFeeInLoan ? num(loan.processingFee) : 0));
+}
+function loanTermMonths(loan) { return loan.termUnit === 'years' ? num(loan.termValue) * 12 : num(loan.termValue); }
+
+function generateSchedule(loan) {
+  const principal = loanAmount(loan);
+  const months = loanTermMonths(loan);
+  const rate = num(loan.interestRate);
+  const emi = calcEMI(principal, rate, months);
+  const r = (rate / 100) / 12;
+  let balance = principal;
+  const rows = [];
+  for (let i = 1; i <= months; i++) {
+    const interest = balance * r;
+    let principalPortion = emi - interest;
+    if (i === months || principalPortion > balance) principalPortion = balance;
+    balance = Math.max(0, balance - principalPortion);
+    rows.push({
+      id: uid('inst'), number: i,
+      dueDate: addMonths(loan.startDate, i - 1),
+      principal: Math.round(principalPortion * 100) / 100,
+      interest: Math.round(interest * 100) / 100,
+      paid: false, paidDate: '',
+    });
+  }
+  return rows;
+}
+
+function applyDeferment(schedule, fromNumber, months) {
+  return schedule.map(row => row.number >= fromNumber ? { ...row, dueDate: addMonths(row.dueDate, months) } : row);
+}
+
+function loanStats(loan) {
+  const schedule = loan.schedule || [];
+  const totalPrincipal = schedule.reduce((s, r) => s + num(r.principal), 0);
+  const totalInterest = schedule.reduce((s, r) => s + num(r.interest), 0);
+  const paidRows = schedule.filter(r => r.paid);
+  const paidPrincipal = paidRows.reduce((s, r) => s + num(r.principal), 0);
+  const paidInterest = paidRows.reduce((s, r) => s + num(r.interest), 0);
+  const balancePrincipal = totalPrincipal - paidPrincipal;
+  const balanceInterest = totalInterest - paidInterest;
+  const unpaid = schedule.filter(r => !r.paid).sort((a, b) => a.number - b.number);
+  const nextDue = unpaid[0] || null;
+  const payoffDate = schedule.length ? schedule[schedule.length - 1].dueDate : null;
+  const todayPeriod = new Date().toISOString().slice(0, 7);
+  const overdue = !!(nextDue && nextDue.dueDate < todayPeriod);
+  const monthlyEMI = schedule.length ? (num(schedule[0].principal) + num(schedule[0].interest)) : 0;
+  const totalAmount = totalPrincipal + totalInterest;
+  const paidAmount = paidPrincipal + paidInterest;
+  const balanceAmount = totalAmount - paidAmount;
+  const paidPct = totalAmount ? paidAmount / totalAmount : 0;
+  const principalPaidPct = totalPrincipal ? paidPrincipal / totalPrincipal : 0;
+  const interestPaidPct = totalInterest ? paidInterest / totalInterest : 0;
+  const installmentsPaid = paidRows.length;
+  const installmentsTotal = schedule.length;
+  return { totalPrincipal, totalInterest, paidPrincipal, paidInterest, balancePrincipal, balanceInterest, nextDue, payoffDate, overdue, monthlyEMI, totalAmount, paidAmount, balanceAmount, paidPct, principalPaidPct, interestPaidPct, installmentsPaid, installmentsTotal };
 }
 
 function emptyFeasibilityStudy() {
@@ -415,6 +583,7 @@ function App() {
   const [loaded, setLoaded] = useState(false);
 
   const [companyName, setCompanyName] = useState('My Rent A Car LLC');
+  const [logoDataUrl, setLogoDataUrl] = useState('');
   const [year, setYear] = useState('2026');
   const [currency, setCurrency] = useState('AED');
   const [baseDays, setBaseDays] = useState(22);
@@ -426,19 +595,51 @@ function App() {
   const [vehicleRevenue, setVehicleRevenue] = useState({});
   const [defaultUsefulLife, setDefaultUsefulLife] = useState(4);
   const [feasibilityStudies, setFeasibilityStudies] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [printLoanId, setPrintLoanId] = useState(null);
+  const [printMode, setPrintMode] = useState('cumulative');
 
   const [reportFrom, setReportFrom] = useState(year + '-01');
   const [reportTo, setReportTo] = useState(year + '-12');
   const [activeTab, setActiveTab] = useState('pnl-entry');
+  const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
+  const [lastSaved, setLastSaved] = useState(null);
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthPw, setReauthPw] = useState('');
 
-  async function apiCall(method, body) {
+  async function apiCall(method, body, pwOverride) {
     const res = await fetch('/api/data', {
       method,
-      headers: { 'content-type': 'application/json', 'x-app-password': password },
+      headers: { 'content-type': 'application/json', 'x-app-password': pwOverride !== undefined ? pwOverride : password },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (res.status === 401) throw new Error('unauthorized');
     return res.json();
+  }
+
+  function currentFullState() {
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo };
+  }
+
+  async function performSave(pwOverride) {
+    setSaveStatus('saving');
+    try {
+      await apiCall('POST', currentFullState(), pwOverride);
+      setSaveStatus('saved');
+      setLastSaved(new Date());
+      setShowReauth(false);
+    } catch (e) {
+      setSaveStatus('error');
+      if (String(e.message).includes('unauthorized')) setShowReauth(true);
+    }
+  }
+
+  function retryWithNewPassword() {
+    if (!reauthPw) return;
+    setPassword(reauthPw);
+    sessionStorage.setItem('fleet_app_pw', reauthPw);
+    performSave(reauthPw);
+    setReauthPw('');
   }
 
   async function tryLogin(pw) {
@@ -450,6 +651,7 @@ function App() {
       const data = await res.json();
       if (data) {
         if (data.companyName) setCompanyName(data.companyName);
+        if (data.logoDataUrl !== undefined) setLogoDataUrl(data.logoDataUrl);
         if (data.year) setYear(data.year);
         if (data.currency) setCurrency(data.currency);
         if (data.baseDays) setBaseDays(data.baseDays);
@@ -461,6 +663,7 @@ function App() {
         if (data.vehicleRevenue) setVehicleRevenue(data.vehicleRevenue);
         if (data.defaultUsefulLife) setDefaultUsefulLife(data.defaultUsefulLife);
         if (data.feasibilityStudies) setFeasibilityStudies(data.feasibilityStudies);
+        if (data.loans) setLoans(data.loans);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
       }
@@ -480,18 +683,15 @@ function App() {
 
   useEffect(() => {
     if (!loaded || !authed) return;
-    const t = setTimeout(() => {
-      apiCall('POST', { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo })
-        .catch(e => console.error('save failed', e));
-    }, 500);
+    const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, loaded, authed]);
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
 
   function downloadBackup() {
-    const state = { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, reportFrom, reportTo, backupDate: new Date().toISOString() };
+    const state = { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, backupDate: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -508,6 +708,7 @@ function App() {
       try {
         const data = JSON.parse(evt.target.result);
         if (data.companyName) setCompanyName(data.companyName);
+        if (data.logoDataUrl !== undefined) setLogoDataUrl(data.logoDataUrl);
         if (data.year) setYear(data.year);
         if (data.currency) setCurrency(data.currency);
         if (data.baseDays) setBaseDays(data.baseDays);
@@ -519,6 +720,7 @@ function App() {
         if (data.vehicleRevenue) setVehicleRevenue(data.vehicleRevenue);
         if (data.defaultUsefulLife) setDefaultUsefulLife(data.defaultUsefulLife);
         if (data.feasibilityStudies) setFeasibilityStudies(data.feasibilityStudies);
+        if (data.loans) setLoans(data.loans);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
         window.alert('Backup restored successfully.');
@@ -529,12 +731,29 @@ function App() {
     reader.readAsText(file);
   }
 
-  function handlePrint() {
+  function handlePrintCumulative() {
+    setPrintLoanId(null);
+    setPrintMode('cumulative');
     setActiveTab('full-report');
     setTimeout(() => window.print(), 200);
   }
 
-  function exportExcel() {
+  function handlePrint() {
+    setPrintLoanId(null);
+    if (activeTab === 'quick-review') setPrintMode('quick-review');
+    else if (activeTab === 'pnl-compare') setPrintMode('pnl');
+    else if (activeTab === 'occ-report') setPrintMode('occupancy');
+    else if (activeTab === 'model-compare') setPrintMode('model');
+    else { handlePrintCumulative(); return; }
+    setTimeout(() => window.print(), 200);
+  }
+
+  function handlePrintLoan(loanId) {
+    setPrintLoanId(loanId);
+    setTimeout(() => window.print(), 200);
+  }
+
+  function exportExcelCumulative() {
     const wb = XLSX.utils.book_new();
     const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
 
@@ -552,64 +771,88 @@ function App() {
       ['Net Margin %', pctStr(totals.netPct_budget), pctStr(totals.netPct_actual), ''],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
-
-    const detailHeader = ['Particulars', ...rangeMonths.flatMap(p => [monthLabel(p) + ' Budget', monthLabel(p) + ' Actual'])];
-    const detailRows = [detailHeader];
-    const pushSection = (sec, subtotalLabel, subtotalKey) => {
-      lineItems[sec].forEach(item => {
-        detailRows.push([item.label, ...rangeMonths.flatMap(p => {
-          const md = (monthlyData[p] || {})[item.key] || {};
-          return [num(md.budget), num(md.actual)];
-        })]);
-      });
-      if (subtotalLabel) detailRows.push([subtotalLabel, ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c[subtotalKey + '_budget'], c[subtotalKey + '_actual']]; })]);
-    };
-    pushSection('revenue', 'Total Income', 'income');
-    pushSection('direct', 'Total Direct Expenses', 'direct');
-    detailRows.push(['Gross Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.gross_budget, c.gross_actual]; })]);
-    pushSection('indirect', 'Total Indirect Expenses', 'indirect');
-    detailRows.push(['EBITDA', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.ebitda_budget, c.ebitda_actual]; })]);
-    pushSection('interest', 'Total Interest & Bank Charges', 'interest');
-    pushSection('belowLine', null, null);
-    detailRows.push(['Net Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.netprofit_budget, c.netprofit_actual]; })]);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), 'PnL Detail');
-
-    const occRows = [['Car', 'Plate', ...rangeMonths.map(monthLabel), 'AVG %', 'Remarks']];
-    vehicles.forEach(v => {
-      const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
-      const valid = pcts.filter(x => x !== null);
-      const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
-      occRows.push([v.name, v.plate, ...pcts.map(p => p === null ? '' : (p * 100).toFixed(0) + '%'), avg === null ? '' : (avg * 100).toFixed(0) + '%', avg === null ? '' : (avg >= 0.5 ? 'OK' : 'Workout')]);
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(occRows), 'Occupancy Matrix');
-
-    const buckets = { '0-30%': 0, '31-50%': 0, '51-75%': 0, '76-100%+': 0 };
-    vehicles.forEach(v => {
-      const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; }).filter(x => x !== null);
-      if (!pcts.length) return;
-      const avg = pcts.reduce((a, b) => a + b, 0) / pcts.length;
-      if (avg < 0.3) buckets['0-30%']++; else if (avg < 0.5) buckets['31-50%']++; else if (avg < 0.75) buckets['51-75%']++; else buckets['76-100%+']++;
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Bucket', 'Vehicle Count'], ...Object.entries(buckets)]), 'Occupancy Distribution');
-
-    const roiRows = [['Model', 'Plate', 'Purchase Value', 'Useful Life (yrs)', 'Avg Monthly Income', 'Required Monthly Income', 'Coverage %', 'Verdict']];
-    vehicles.forEach(v => {
-      const s = vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife);
-      roiRows.push([v.name, v.plate, num(v.purchaseValue), s.usefulLife, Math.round(s.avgMonthly), Math.round(s.required), s.coverage === null ? '' : (s.coverage * 100).toFixed(0) + '%', s.verdict]);
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(roiRows), 'Vehicle ROI');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildPnlDetailRows(rangeMonths, lineItems, monthlyData)), 'PnL Detail');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Matrix');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Distribution');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildRoiRows(vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife)), 'Vehicle ROI');
 
     if (feasibilityStudies.length) {
-      const feasRows = [['Study', 'Total Price', 'Down Payment', 'Net Amount', 'Useful Life (yrs)', 'Working Days/Month', 'Total Annual Expenses', 'Total Cost + Expenses', 'Target Profit %', 'Profit (life)', 'Grand Total', 'Required Daily Rate', 'Market Daily Rate', 'Monthly EMI', 'Verdict']];
-      feasibilityStudies.forEach(s => {
-        const fc = computeFeasibility(s);
-        feasRows.push([s.name, num(s.totalPrice), num(s.downPayment), fc.netAmount, s.usefulLifeYears, s.workingDaysPerMonth, Math.round(fc.annualExpenseTotal), Math.round(fc.costBase), s.profitPercent, Math.round(fc.profitTotal), Math.round(fc.grandTotal), Math.round(fc.requiredDailyRate), num(s.marketDailyRate), Math.round(fc.emi), fc.verdict]);
-      });
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(feasRows), 'Feasibility Studies');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFeasibilityRows(feasibilityStudies)), 'Feasibility Studies');
+    }
+    if (loans.length) {
+      const { summaryRows: loanSummaryRows, scheduleRows: loanScheduleRows } = buildLoanRows(loans);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(loanSummaryRows), 'Loan Summary');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(loanScheduleRows), 'Loan Schedules');
     }
 
-    XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-fleet-report-${reportFrom}_to_${reportTo}.xlsx`);
+    XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-cumulative-report-${reportFrom}_to_${reportTo}.xlsx`);
   }
+
+  function exportExcel() {
+    if (activeTab === 'quick-review') {
+      const wb = XLSX.utils.book_new();
+      const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+      const rows = [
+        ['Company', companyName], ['Period', rangeMonths.map(monthLabel).join(', ')], [],
+        ['Metric', 'Budget', 'Actual', 'Variance'],
+        ['Total Income', totals.income_budget, totals.income_actual, totals.income_actual - totals.income_budget],
+        ['Direct Expenses', totals.direct_budget, totals.direct_actual, totals.direct_budget - totals.direct_actual],
+        ['Net Profit', totals.netprofit_budget, totals.netprofit_actual, totals.netprofit_actual - totals.netprofit_budget],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Quick Review');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-quick-review-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'pnl-compare') {
+      const wb = XLSX.utils.book_new();
+      const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+      const summaryRows = [
+        ['Company', companyName], ['Period', rangeMonths.map(monthLabel).join(', ')], [],
+        ['Metric', 'Budget', 'Actual', 'Variance'],
+        ['Total Income', totals.income_budget, totals.income_actual, totals.income_actual - totals.income_budget],
+        ['Total Direct Expenses', totals.direct_budget, totals.direct_actual, totals.direct_budget - totals.direct_actual],
+        ['Gross Profit', totals.gross_budget, totals.gross_actual, totals.gross_actual - totals.gross_budget],
+        ['Total Indirect Expenses', totals.indirect_budget, totals.indirect_actual, totals.indirect_budget - totals.indirect_actual],
+        ['EBITDA', totals.ebitda_budget, totals.ebitda_actual, totals.ebitda_actual - totals.ebitda_budget],
+        ['Net Profit', totals.netprofit_budget, totals.netprofit_actual, totals.netprofit_actual - totals.netprofit_budget],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildPnlDetailRows(rangeMonths, lineItems, monthlyData)), 'PnL Detail');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-pnl-report-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'occ-report') {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Matrix');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Distribution');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-occupancy-report-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'model-compare') {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildRoiRows(vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife)), 'Vehicle ROI');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-model-roi-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'feasibility') {
+      if (!feasibilityStudies.length) { window.alert('No feasibility studies to export yet.'); return; }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFeasibilityRows(feasibilityStudies)), 'Feasibility Studies');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-feasibility-studies.xlsx`);
+      return;
+    }
+    if (activeTab === 'financing') {
+      if (!loans.length) { window.alert('No loans to export yet.'); return; }
+      const wb = XLSX.utils.book_new();
+      const { summaryRows, scheduleRows } = buildLoanRows(loans);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Loan Summary');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(scheduleRows), 'Loan Schedules');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-loan-schedules.xlsx`);
+      return;
+    }
+    exportExcelCumulative();
+  }
+
 
   if (!authed) {
     return (
@@ -630,7 +873,9 @@ function App() {
   return (
     <div className="app">
       <aside className="sidebar no-print">
-        <div className="brand">🚗 <span>FleetIQ</span></div>
+        <div className="brand">
+          {logoDataUrl ? <img src={logoDataUrl} alt="logo" style={{ height: 26, maxWidth: 150, objectFit: 'contain' }} /> : <>🚗 <span>{companyName || 'FleetIQ'}</span></>}
+        </div>
         <nav>
           <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>
           <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
@@ -641,6 +886,7 @@ function App() {
           <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>
           <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
           <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>
+          <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>
           <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
           <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
         </nav>
@@ -657,15 +903,33 @@ function App() {
             <div className="field"><label>Report From</label><input type="month" value={reportFrom} onChange={e => setReportFrom(e.target.value)} /></div>
             <div className="field"><label>Report To</label><input type="month" value={reportTo} onChange={e => setReportTo(e.target.value)} /></div>
           </div>
+          <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {saveStatus === 'saving' && <span style={{ color: 'var(--muted)' }}>● Saving…</span>}
+            {saveStatus === 'saved' && <span style={{ color: 'var(--green)' }}>● Saved{lastSaved ? ' ' + lastSaved.toLocaleTimeString() : ''}</span>}
+            {saveStatus === 'error' && <span style={{ color: 'var(--red)' }}>● Not saved</span>}
+          </div>
           <div className="actions">
-            <button className="btn" onClick={exportExcel}>📥 Export Excel</button>
-            <button className="btn" onClick={handlePrint}>🖨 Export PDF</button>
+            <button className="btn" onClick={exportExcel} title="Exports just the current section">📥 Export Excel</button>
+            <button className="btn" onClick={handlePrint} title="Exports just the current section">🖨 Export PDF</button>
+            <button className="btn" onClick={exportExcelCumulative} title="Quick Review + P&L + Occupancy + ROI + Feasibility + Financing, all in one workbook">📊 Cumulative Excel</button>
+            <button className="btn primary" onClick={handlePrintCumulative} title="Quick Review + P&L + Occupancy + ROI, all in one PDF">📑 Cumulative Report</button>
           </div>
         </header>
 
+        {showReauth && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Couldn't save — your password may have changed.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Your current entries are still here in this tab. Re-enter the site password to resume saving:</span>
+            <input type="password" placeholder="Site password" value={reauthPw} onChange={e => setReauthPw(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') retryWithNewPassword(); }}
+              style={{ padding: '5px 9px', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }} />
+            <button className="btn small primary" onClick={retryWithNewPassword}>Retry Save</button>
+          </div>
+        )}
+
         <div className="main-scroll">
           {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} />}
-          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />}
           {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
           {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
@@ -673,15 +937,49 @@ function App() {
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
+          {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
-          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} />}
-          {activeTab === 'full-report' && <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} />}
+          {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
         </div>
       </div>
 
       <div className="print-only">
-        <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+        {printLoanId ? (
+          <LoanScheduleReport loan={loans.find(l => l.id === printLoanId)} companyName={companyName} currency={currency} />
+        ) : printMode === 'quick-review' ? (
+          <div style={{ padding: 24 }}>
+            <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+          </div>
+        ) : printMode === 'pnl' ? (
+          <div style={{ padding: 24 }}>
+            <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`P&L Budget vs Actual · ${rangeMonths.map(monthLabel).join(' – ')}`} />
+            <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
+          </div>
+        ) : printMode === 'occupancy' ? (
+          <div style={{ padding: 24 }}>
+            <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Occupancy Report · ${rangeMonths.map(monthLabel).join(' – ')}`} />
+            <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+          </div>
+        ) : printMode === 'model' ? (
+          <div style={{ padding: 24 }}>
+            <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Model Comparison & ROI · ${rangeMonths.map(monthLabel).join(' – ')}`} />
+            <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={() => {}} currency={currency} />
+          </div>
+        ) : (
+          <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+        )}
       </div>
+    </div>
+  );
+}
+
+function PrintHeader({ companyName, logoDataUrl, subtitle }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, display: 'block' }} />}
+      <h1 style={{ fontSize: 20 }}>{companyName}</h1>
+      <p style={{ color: 'var(--muted)', marginTop: 4 }}>{subtitle}</p>
     </div>
   );
 }
@@ -1262,6 +1560,340 @@ function FeasibilityDetail({ study, onChange, currency }) {
   );
 }
 
+/* ---------------- Vehicle Financing ---------------- */
+
+function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan }) {
+  const [selectedId, setSelectedId] = useState(loans[0] ? loans[0].id : null);
+
+  function addLoan() {
+    const l = emptyLoan();
+    setLoans([...loans, l]);
+    setSelectedId(l.id);
+  }
+  function deleteLoan(loan) {
+    if (!confirmDelete(loan.modelName || 'this loan', deletePin)) return;
+    setLoans(loans.filter(l => l.id !== loan.id));
+    if (selectedId === loan.id) setSelectedId(null);
+  }
+  function updateLoan(id, patch) {
+    setLoans(loans.map(l => l.id === id ? { ...l, ...patch } : l));
+  }
+
+  const selected = loans.find(l => l.id === selectedId);
+
+  const fleetTotals = loans.reduce((acc, l) => {
+    const s = loanStats(l);
+    acc.principalBalance += s.balancePrincipal;
+    acc.interestBalance += s.balanceInterest;
+    acc.monthlyEMI += s.monthlyEMI;
+    acc.totalFinanced += s.totalAmount;
+    acc.totalPaid += s.paidAmount;
+    if (s.overdue) acc.overdueCount++;
+    return acc;
+  }, { principalBalance: 0, interestBalance: 0, monthlyEMI: 0, overdueCount: 0, totalFinanced: 0, totalPaid: 0 });
+  const fleetPaidPct = fleetTotals.totalFinanced ? fleetTotals.totalPaid / fleetTotals.totalFinanced : 0;
+
+  return (
+    <div>
+      <div className="kpi-row">
+        <div className="kpi-card"><div className="label">Total Financed (all loans)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(fleetTotals.totalPaid, currency)}</div><div className="sub" style={{ color: 'var(--muted)' }}>{pctStr(fleetPaidPct)} of total</div></div>
+        <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Overdue Loans</div><div className="value mono" style={{ color: fleetTotals.overdueCount ? 'var(--red)' : 'var(--ink)' }}>{fleetTotals.overdueCount}</div></div>
+      </div>
+
+      {loans.length > 0 && (
+        <div className="panel">
+          <h3>Payment Progress by Vehicle</h3>
+          <HBarList data={loans.map(l => { const s = loanStats(l); return { name: l.modelName || '(unnamed)', value: Math.round(s.paidPct * 100), display: pctStr(s.paidPct) + ' · ' + fmt(s.paidAmount, currency), color: s.paidPct >= 1 ? '#3E9C6E' : '#2D6E8E' }; })} maxVal={100} />
+        </div>
+      )}
+
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Vehicle Loans</h3>
+          <button className="btn primary" onClick={addLoan}>+ Add Loan</button>
+        </div>
+        {loans.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add a loan for each financed vehicle — enter the car value, down payment, interest rate, fees, and term, then generate the payment schedule.</p>
+        ) : (
+          <table>
+            <thead><tr><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th>Next Due</th><th></th></tr></thead>
+            <tbody>
+              {loans.map(l => {
+                const s = loanStats(l);
+                return (
+                  <tr key={l.id} style={{ background: l.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(l.id)}>
+                    <td>{l.modelName || '(unnamed)'}</td>
+                    <td>{l.lender || '—'}</td>
+                    <td className="num">{fmt(loanAmount(l), currency)}</td>
+                    <td className="num">{fmt(s.monthlyEMI, currency)}</td>
+                    <td className="num">{pctStr(s.paidPct)}</td>
+                    <td className="num">{fmt(s.balancePrincipal, currency)}</td>
+                    <td>{s.nextDue ? <span className={`badge ${s.overdue ? 'neg' : 'pos'}`}>{monthLabel(s.nextDue.dueDate)}{s.overdue ? ' overdue' : ''}</span> : <span className="badge pos">Paid off</span>}</td>
+                    <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteLoan(l); }}>✕</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && <FinancingDetail loan={selected} vehicles={vehicles} onChange={patch => updateLoan(selected.id, patch)} currency={currency} onPrint={() => onPrintLoan(selected.id)} />}
+    </div>
+  );
+}
+
+function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
+  const stats = loanStats(loan);
+  const [deferFrom, setDeferFrom] = useState(stats.nextDue ? stats.nextDue.number : 1);
+  const [deferMonths, setDeferMonths] = useState(1);
+  const [bulkText, setBulkText] = useState('');
+  const [markPaidUpTo, setMarkPaidUpTo] = useState('');
+
+  function regenerate() {
+    if (loan.schedule.some(r => r.paid) && !window.confirm('This loan already has paid installments recorded. Regenerating will replace the ENTIRE schedule and lose that paid history. Continue?')) return;
+    onChange({ schedule: generateSchedule(loan) });
+  }
+
+  function updateRow(id, field, value) {
+    onChange({ schedule: loan.schedule.map(r => r.id === id ? { ...r, [field]: value } : r) });
+  }
+  function togglePaid(id) {
+    onChange({
+      schedule: loan.schedule.map(r => r.id === id ? { ...r, paid: !r.paid, paidDate: !r.paid ? new Date().toISOString().slice(0, 10) : '' } : r)
+    });
+  }
+
+  function applyDefer() {
+    const fromN = num(deferFrom);
+    const months = num(deferMonths);
+    if (!fromN || !months) return;
+    const newSchedule = applyDeferment(loan.schedule, fromN, months);
+    const newDeferments = [...(loan.deferments || []), { id: uid('def'), fromNumber: fromN, months, appliedOn: new Date().toISOString().slice(0, 10) }];
+    onChange({ schedule: newSchedule, deferments: newDeferments });
+  }
+
+  function markPaidThrough() {
+    if (!markPaidUpTo) return;
+    onChange({ schedule: loan.schedule.map(r => r.dueDate <= markPaidUpTo ? { ...r, paid: true, paidDate: r.paidDate || (r.dueDate + '-01') } : r) });
+  }
+
+  function applyBulk() {
+    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    const rows = lines.map(line => {
+      const parts = line.split(/\t|,/).map(p => p.trim()).filter(p => p !== '');
+      let number, dateStr, principal, interest;
+      if (parts.length >= 6) {
+        // Bank format: Inst.No, Date, EMI, Principal Balance, Principal Component, Profit/Interest Component, [Rate]
+        number = parts[0]; dateStr = parts[1]; principal = parts[4]; interest = parts[5];
+      } else {
+        // Simple format: Number, Date, Principal, Interest
+        number = parts[0]; dateStr = parts[1]; principal = parts[2]; interest = parts[3];
+      }
+      return { id: uid('inst'), number: num(number), dueDate: parseFlexibleDate(dateStr), principal: num(principal), interest: num(interest), paid: false, paidDate: '' };
+    }).sort((a, b) => a.number - b.number);
+    onChange({ schedule: rows });
+    setBulkText('');
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Loan Details</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 180px' }}><label>Vehicle / Model</label><input value={loan.modelName} onChange={e => onChange({ modelName: e.target.value })} placeholder="Nissan Patrol" /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Link to Fleet Vehicle (optional)</label>
+            <select value={loan.vehicleId} onChange={e => onChange({ vehicleId: e.target.value })}>
+              <option value="">— not linked —</option>
+              {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
+            </select>
+          </div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Lender / Bank</label><input value={loan.lender} onChange={e => onChange({ lender: e.target.value })} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Car Value ({currency})</label><input type="number" value={loan.carValue} onChange={e => onChange({ carValue: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Down Payment ({currency})</label><input type="number" value={loan.downPayment} onChange={e => onChange({ downPayment: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Processing / Other Fee</label><input type="number" value={loan.processingFee} onChange={e => onChange({ processingFee: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 160px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" checked={loan.includeFeeInLoan} onChange={e => onChange({ includeFeeInLoan: e.target.checked })} /> Finance fee into loan
+            </label>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Interest Rate % / Year</label><input type="number" value={loan.interestRate} onChange={e => onChange({ interestRate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 100px' }}><label>Term</label><input type="number" value={loan.termValue} onChange={e => onChange({ termValue: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 110px' }}><label>Unit</label>
+            <select value={loan.termUnit} onChange={e => onChange({ termUnit: e.target.value })}>
+              <option value="months">Months</option>
+              <option value="years">Years</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Start Date</label><input type="month" value={loan.startDate} onChange={e => onChange({ startDate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Loan Amount</label><input disabled value={fmt(loanAmount(loan), currency)} /></div>
+        </div>
+        <button className="btn primary" style={{ marginTop: 10 }} onClick={regenerate}>{loan.schedule.length ? 'Regenerate Schedule' : 'Generate Schedule'}</button>
+      </div>
+
+      {loan.schedule.length > 0 && (
+        <>
+          <div className="kpi-row">
+            <div className="kpi-card"><div className="label">Monthly EMI</div><div className="value mono">{fmt(stats.monthlyEMI, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Principal Balance</div><div className="value mono">{fmt(stats.balancePrincipal, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Interest Balance</div><div className="value mono">{fmt(stats.balanceInterest, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Payoff Date</div><div className="value mono" style={{ fontSize: 18 }}>{stats.payoffDate ? monthLabel(stats.payoffDate) : '—'}</div></div>
+            {stats.overdue && <div className="kpi-card" style={{ borderLeft: '4px solid var(--red)' }}><div className="label">Status</div><div className="value mono" style={{ color: 'var(--red)', fontSize: 16 }}>Overdue</div></div>}
+          </div>
+
+          <div className="grid-2">
+            <div className="panel" style={{ textAlign: 'center' }}>
+              <h3>Payment Progress</h3>
+              <DonutGauge pct={stats.paidPct} color={stats.paidPct >= 1 ? '#3E9C6E' : '#2D6E8E'} />
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>{stats.installmentsPaid} of {stats.installmentsTotal} installments paid</p>
+            </div>
+            <div className="panel">
+              <h3>Total vs Paid</h3>
+              <GroupedBarChart data={[
+                { label: 'Principal', total: stats.totalPrincipal, paid: stats.paidPrincipal },
+                { label: 'Interest', total: stats.totalInterest, paid: stats.paidInterest },
+                { label: 'Total', total: stats.totalAmount, paid: stats.paidAmount },
+              ]} series={[{ key: 'total', label: 'Total', color: '#D9C8B9' }, { key: 'paid', label: 'Paid', color: '#2D6E8E' }]} height={160} />
+            </div>
+          </div>
+
+          <div className="panel">
+            <table>
+              <thead><tr><th>Category</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Balance</th><th className="num">% Paid</th></tr></thead>
+              <tbody>
+                <tr><td>Principal</td><td className="num">{fmt(stats.totalPrincipal, currency)}</td><td className="num">{fmt(stats.paidPrincipal, currency)}</td><td className="num">{fmt(stats.balancePrincipal, currency)}</td><td className="num">{pctStr(stats.principalPaidPct)}</td></tr>
+                <tr><td>Interest</td><td className="num">{fmt(stats.totalInterest, currency)}</td><td className="num">{fmt(stats.paidInterest, currency)}</td><td className="num">{fmt(stats.balanceInterest, currency)}</td><td className="num">{pctStr(stats.interestPaidPct)}</td></tr>
+                <tr className="net-row"><td>Total</td><td className="num">{fmt(stats.totalAmount, currency)}</td><td className="num">{fmt(stats.paidAmount, currency)}</td><td className="num">{fmt(stats.balanceAmount, currency)}</td><td className="num">{pctStr(stats.paidPct)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel">
+            <h3>Defer / Postpone Payment</h3>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Push a due date forward — e.g. a 2-month deferment shifts that installment and every one after it two months later (payoff date moves out too).</p>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="field"><label>Defer from installment #</label><input type="number" min="1" value={deferFrom} onChange={e => setDeferFrom(e.target.value)} style={{ width: 100 }} /></div>
+              <div className="field"><label>Months to defer</label><input type="number" min="1" value={deferMonths} onChange={e => setDeferMonths(e.target.value)} style={{ width: 100 }} /></div>
+              <button className="btn primary" onClick={applyDefer}>Apply Deferment</button>
+            </div>
+            {loan.deferments && loan.deferments.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                {loan.deferments.map(d => (
+                  <div key={d.id} style={{ fontSize: 12, color: 'var(--muted)' }}>• Deferred {d.months} month{d.months > 1 ? 's' : ''} starting from installment #{d.fromNumber} — applied {d.appliedOn}</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 10 }}>
+              <h3 style={{ margin: 0 }}>Payment Schedule</h3>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>Mark all installments due through</span>
+                <input type="month" value={markPaidUpTo} onChange={e => setMarkPaidUpTo(e.target.value)} style={{ padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 5, fontSize: 12.5 }} />
+                <button className="btn small" onClick={markPaidThrough}>as Paid</button>
+                <button className="btn small" onClick={onPrint}>🖨 Print Schedule</button>
+              </div>
+            </div>
+            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+              <table>
+                <thead><tr><th>#</th><th>Due Date</th><th className="num">Principal</th><th className="num">Interest</th><th className="num">Total</th><th>Paid</th><th>Paid Date</th></tr></thead>
+                <tbody>
+                  {loan.schedule.map(r => (
+                    <tr key={r.id} style={{ background: !r.paid && r.dueDate < new Date().toISOString().slice(0, 7) ? '#FDEDEC' : undefined }}>
+                      <td>{r.number}</td>
+                      <td><input type="month" value={r.dueDate} onChange={e => updateRow(r.id, 'dueDate', e.target.value)} style={{ width: 120 }} /></td>
+                      <td className="num"><input type="number" value={r.principal} onChange={e => updateRow(r.id, 'principal', e.target.value)} /></td>
+                      <td className="num"><input type="number" value={r.interest} onChange={e => updateRow(r.id, 'interest', e.target.value)} /></td>
+                      <td className="num">{fmt(num(r.principal) + num(r.interest), currency)}</td>
+                      <td><input type="checkbox" checked={r.paid} onChange={() => togglePaid(r.id)} /></td>
+                      <td>{r.paid ? r.paidDate : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="panel">
+        <h3>Import / Paste Your Own Schedule</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>If your bank gave you the exact schedule, paste it here — one installment per line: <code>Number, Due Date (YYYY-MM), Principal, Interest</code>. This replaces the schedule above entirely.</p>
+        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={4}
+          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
+          placeholder={"1, 2026-08, 5200.00, 1030.05\n2, 2026-09, 5240.85, 989.21"} />
+        <button className="btn primary" style={{ marginTop: 8 }} onClick={applyBulk}>Replace Schedule with Pasted Data</button>
+      </div>
+    </div>
+  );
+}
+
+function LoanScheduleReport({ loan, companyName, currency }) {
+  if (!loan) return null;
+  const stats = loanStats(loan);
+  return (
+    <div style={{ padding: 24 }}>
+      <h1 style={{ fontSize: 20 }}>{companyName}</h1>
+      <h2 style={{ fontSize: 15, color: 'var(--muted)', fontWeight: 500, margin: '4px 0 16px 0' }}>Vehicle Loan Schedule — {loan.modelName || 'Vehicle'}</h2>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 4 }}>
+          <span>Payment Progress</span>
+          <span><b>{pctStr(stats.paidPct)}</b> paid — {fmt(stats.paidAmount, currency)} of {fmt(stats.totalAmount, currency)}</span>
+        </div>
+        <div style={{ height: 16, background: '#EEEFEA', borderRadius: 4, overflow: 'hidden', border: '1px solid #ccc' }}>
+          <div style={{ height: '100%', width: (stats.paidPct * 100) + '%', background: stats.paidPct >= 1 ? '#3E9C6E' : '#2D6E8E' }} />
+        </div>
+      </div>
+
+      <table style={{ marginBottom: 18 }}>
+        <tbody>
+          <tr><td>Lender</td><td className="num">{loan.lender || '—'}</td><td>Car Value</td><td className="num">{fmt(loan.carValue, currency)}</td></tr>
+          <tr><td>Down Payment</td><td className="num">{fmt(loan.downPayment, currency)}</td><td>Loan Amount</td><td className="num">{fmt(loanAmount(loan), currency)}</td></tr>
+          <tr><td>Interest Rate</td><td className="num">{loan.interestRate}%</td><td>Term</td><td className="num">{loanTermMonths(loan)} months</td></tr>
+          <tr><td>Start Date</td><td className="num">{monthLabel(loan.startDate)}</td><td>Payoff Date</td><td className="num">{stats.payoffDate ? monthLabel(stats.payoffDate) : '—'}</td></tr>
+        </tbody>
+      </table>
+
+      <table style={{ border: '1px solid #ccc', marginBottom: 18 }}>
+        <thead><tr><th style={{ border: '1px solid #ccc' }}>Category</th><th style={{ border: '1px solid #ccc' }} className="num">Total</th><th style={{ border: '1px solid #ccc' }} className="num">Paid</th><th style={{ border: '1px solid #ccc' }} className="num">Balance</th><th style={{ border: '1px solid #ccc' }} className="num">% Paid</th></tr></thead>
+        <tbody>
+          <tr><td style={{ border: '1px solid #ccc' }}>Principal</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.totalPrincipal, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.paidPrincipal, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.balancePrincipal, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{pctStr(stats.principalPaidPct)}</td></tr>
+          <tr><td style={{ border: '1px solid #ccc' }}>Interest</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.totalInterest, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.paidInterest, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.balanceInterest, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{pctStr(stats.interestPaidPct)}</td></tr>
+          <tr style={{ fontWeight: 700 }}><td style={{ border: '1px solid #ccc' }}>Total</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.totalAmount, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.paidAmount, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(stats.balanceAmount, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{pctStr(stats.paidPct)}</td></tr>
+        </tbody>
+      </table>
+
+      <table style={{ border: '1px solid #ccc' }}>
+        <thead><tr><th style={{ border: '1px solid #ccc' }}>#</th><th style={{ border: '1px solid #ccc' }}>Due Date</th><th style={{ border: '1px solid #ccc' }} className="num">Principal</th><th style={{ border: '1px solid #ccc' }} className="num">Interest</th><th style={{ border: '1px solid #ccc' }} className="num">Total</th><th style={{ border: '1px solid #ccc' }}>Status</th></tr></thead>
+        <tbody>
+          {loan.schedule.map(r => (
+            <tr key={r.id}>
+              <td style={{ border: '1px solid #ccc' }}>{r.number}</td>
+              <td style={{ border: '1px solid #ccc' }}>{monthLabel(r.dueDate)}</td>
+              <td style={{ border: '1px solid #ccc' }} className="num">{fmt(r.principal, currency)}</td>
+              <td style={{ border: '1px solid #ccc' }} className="num">{fmt(r.interest, currency)}</td>
+              <td style={{ border: '1px solid #ccc' }} className="num">{fmt(num(r.principal) + num(r.interest), currency)}</td>
+              <td style={{ border: '1px solid #ccc' }}>{r.paid ? 'Paid' + (r.paidDate ? ' (' + r.paidDate + ')' : '') : 'Pending'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="kpi-row" style={{ marginTop: 18 }}>
+        <div className="kpi-card"><div className="label">Principal Balance</div><div className="value mono">{fmt(stats.balancePrincipal, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Interest Balance</div><div className="value mono">{fmt(stats.balanceInterest, currency)}</div></div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Vehicles ---------------- */
 
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
@@ -1339,12 +1971,36 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
 
 /* ---------------- Settings ---------------- */
 
-function SettingsPanel({ companyName, setCompanyName, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup }) {
+function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup }) {
   const [pinInput, setPinInput] = useState(deletePin);
+  const [logoError, setLogoError] = useState('');
+
+  function handleLogoUpload(file) {
+    setLogoError('');
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setLogoError('Please choose an image file (PNG, JPG, SVG).'); return; }
+    if (file.size > 500 * 1024) { setLogoError('Please choose an image under 500KB — try a smaller or more compressed logo.'); return; }
+    const reader = new FileReader();
+    reader.onload = (evt) => setLogoDataUrl(evt.target.result);
+    reader.readAsDataURL(file);
+  }
+
   return (
     <div className="panel" style={{ maxWidth: 520 }}>
       <h3>Report Settings</h3>
       <div className="field" style={{ marginBottom: 12 }}><label>Company Name (shown on all reports)</label><input value={companyName} onChange={e => setCompanyName(e.target.value)} /></div>
+
+      <div className="field" style={{ marginBottom: 12 }}>
+        <label>Company Logo (shown in the sidebar instead of the name, and can appear on printed reports)</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
+          {logoDataUrl && <img src={logoDataUrl} alt="logo preview" style={{ height: 40, maxWidth: 160, objectFit: 'contain', border: '1px solid var(--line)', borderRadius: 6, padding: 4, background: '#fff' }} />}
+          <input type="file" accept="image/*" onChange={e => handleLogoUpload(e.target.files[0])} />
+          {logoDataUrl && <button className="btn small" onClick={() => setLogoDataUrl('')}>Remove Logo</button>}
+        </div>
+        {logoError && <p style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>{logoError}</p>}
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>If no logo is uploaded, your Company Name is shown instead.</p>
+      </div>
+
       <div className="field" style={{ marginBottom: 12 }}><label>Default Year (used to prefill month pickers — you can still enter data for any year)</label><input value={year} onChange={e => setYear(e.target.value.replace(/\D/g, '').slice(0, 4) || '2026')} /></div>
       <div className="field" style={{ marginBottom: 12 }}><label>Currency</label><input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 5))} /></div>
       <div className="field" style={{ marginBottom: 12 }}><label>Base Working Days / Month (for occupancy %)</label><input type="number" value={baseDays} onChange={e => setBaseDays(Math.max(1, num(e.target.value) || 22))} /></div>
@@ -1628,7 +2284,7 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
 
 /* ---------------- Quick Review (executive one-page summary) ---------------- */
 
-function QuickReviewPanel({ companyName, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
   const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
   const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
 
@@ -1637,6 +2293,7 @@ function QuickReviewPanel({ companyName, currency, rangeMonths, lineItems, month
   return (
     <div>
       <div className="panel" style={{ background: 'linear-gradient(135deg,#161B26,#2D6E8E)', border: 'none' }}>
+        {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, background: '#fff', borderRadius: 6, padding: 4, display: 'block' }} />}
         <h1 style={{ fontSize: 20, color: '#fff', margin: 0 }}>{companyName}</h1>
         <p style={{ color: 'rgba(255,255,255,0.75)', margin: '4px 0 0 0', fontSize: 13 }}>{periodLabel} Performance Dashboard</p>
       </div>
@@ -1714,7 +2371,7 @@ function QuickReviewPanel({ companyName, currency, rangeMonths, lineItems, month
 
 /* ---------------- Full printable report ---------------- */
 
-function FullReport({ companyName, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
   const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
   const yearData = rangeMonths.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
   const occRows = vehicles.map(v => {
@@ -1726,7 +2383,7 @@ function FullReport({ companyName, currency, rangeMonths, lineItems, monthlyData
 
   return (
     <div style={{ padding: 24 }}>
-      <QuickReviewPanel companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+      <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
       <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h1 style={{ fontSize: 22 }}>{companyName}</h1>
       <p style={{ color: 'var(--muted)', marginTop: 4 }}>Budget vs Actual &amp; Occupancy Report · {rangeMonths.map(monthLabel).join(' – ')}</p>
