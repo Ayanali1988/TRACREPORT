@@ -376,20 +376,33 @@ function calcEMI(principal, annualRatePct, termMonths) {
 
 /* ---------------- Vehicle Financing ---------------- */
 
-function addMonths(period, delta) {
-  let [y, m] = period.split('-').map(Number);
-  m += delta;
-  while (m > 12) { m -= 12; y++; }
-  while (m < 1) { m += 12; y--; }
-  return y + '-' + String(m).padStart(2, '0');
+function addMonths(dateStr, delta) {
+  const parts = String(dateStr).split('-').map(Number);
+  const y = parts[0], m = parts[1], d = parts.length >= 3 ? parts[2] : 1;
+  const totalMonths = (m - 1) + delta;
+  const targetYear = y + Math.floor(totalMonths / 12);
+  const targetMonth = ((totalMonths % 12) + 12) % 12; // 0-based, always positive
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const clampedDay = Math.min(d, daysInTargetMonth);
+  const mm = String(targetMonth + 1).padStart(2, '0');
+  if (parts.length >= 3) return `${targetYear}-${mm}-${String(clampedDay).padStart(2, '0')}`;
+  return `${targetYear}-${mm}`;
+}
+
+function fullDateLabel(dateStr) {
+  if (!dateStr) return '—';
+  const parts = String(dateStr).split('-').map(Number);
+  if (parts.length < 3) return monthLabel(dateStr); // legacy month-only data
+  const [y, m, d] = parts;
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function parseFlexibleDate(str) {
   str = String(str || '').trim();
-  if (/^\d{4}-\d{2}$/.test(str)) return str;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str.slice(0, 7);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  if (/^\d{4}-\d{2}$/.test(str)) return str + '-01';
   const m = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/); // DD/MM/YYYY
-  if (m) return m[3] + '-' + m[2].padStart(2, '0');
+  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
   return str;
 }
 
@@ -399,7 +412,7 @@ function emptyLoan() {
     vehicleId: '', modelName: '', lender: '',
     carValue: '', downPayment: '', processingFee: '', includeFeeInLoan: false,
     interestRate: '', termUnit: 'months', termValue: 36,
-    startDate: new Date().toISOString().slice(0, 7),
+    startDate: new Date().toISOString().slice(0, 10),
     schedule: [], deferments: [],
   };
 }
@@ -449,8 +462,8 @@ function loanStats(loan) {
   const unpaid = schedule.filter(r => !r.paid).sort((a, b) => a.number - b.number);
   const nextDue = unpaid[0] || null;
   const payoffDate = schedule.length ? schedule[schedule.length - 1].dueDate : null;
-  const todayPeriod = new Date().toISOString().slice(0, 7);
-  const overdue = !!(nextDue && nextDue.dueDate < todayPeriod);
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = !!(nextDue && nextDue.dueDate < today);
   const monthlyEMI = schedule.length ? (num(schedule[0].principal) + num(schedule[0].interest)) : 0;
   const totalAmount = totalPrincipal + totalInterest;
   const paidAmount = paidPrincipal + paidInterest;
@@ -744,6 +757,8 @@ function App() {
     else if (activeTab === 'pnl-compare') setPrintMode('pnl');
     else if (activeTab === 'occ-report') setPrintMode('occupancy');
     else if (activeTab === 'model-compare') setPrintMode('model');
+    else if (activeTab === 'feasibility') setPrintMode('feasibility');
+    else if (activeTab === 'financing') setPrintMode('financing');
     else { handlePrintCumulative(); return; }
     setTimeout(() => window.print(), 200);
   }
@@ -966,6 +981,10 @@ function App() {
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Model Comparison & ROI · ${rangeMonths.map(monthLabel).join(' – ')}`} />
             <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={() => {}} currency={currency} />
           </div>
+        ) : printMode === 'feasibility' ? (
+          <FeasibilityPrintReport studies={feasibilityStudies} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
+        ) : printMode === 'financing' ? (
+          <FinancingPrintReport loans={loans} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
         ) : (
           <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
         )}
@@ -980,6 +999,76 @@ function PrintHeader({ companyName, logoDataUrl, subtitle }) {
       {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, display: 'block' }} />}
       <h1 style={{ fontSize: 20 }}>{companyName}</h1>
       <p style={{ color: 'var(--muted)', marginTop: 4 }}>{subtitle}</p>
+    </div>
+  );
+}
+
+function FeasibilityPrintReport({ studies, currency, companyName, logoDataUrl }) {
+  return (
+    <div style={{ padding: 24 }}>
+      <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle="Vehicle Feasibility Studies" />
+      <table style={{ border: '1px solid #ccc' }}>
+        <thead><tr>{['Study', 'Total Price', 'Useful Life', 'Required Daily Rate', 'Market Rate', 'Verdict'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {studies.map(s => {
+            const c = computeFeasibility(s);
+            return (
+              <tr key={s.id}>
+                <td style={{ border: '1px solid #ccc' }}>{s.name}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.totalPrice, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{s.usefulLifeYears} yrs</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(c.requiredDailyRate, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{s.marketDailyRate ? fmt(s.marketDailyRate, currency) : '—'}</td>
+                <td style={{ border: '1px solid #ccc' }}>{c.verdict}</td>
+              </tr>
+            );
+          })}
+          {studies.length === 0 && <tr><td colSpan={6} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No feasibility studies saved yet.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FinancingPrintReport({ loans, currency, companyName, logoDataUrl }) {
+  const fleetTotals = loans.reduce((acc, l) => {
+    const s = loanStats(l);
+    acc.principalBalance += s.balancePrincipal;
+    acc.interestBalance += s.balanceInterest;
+    acc.totalFinanced += s.totalAmount;
+    acc.totalPaid += s.paidAmount;
+    return acc;
+  }, { principalBalance: 0, interestBalance: 0, totalFinanced: 0, totalPaid: 0 });
+
+  return (
+    <div style={{ padding: 24 }}>
+      <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle="Vehicle Financing Overview" />
+      <div className="kpi-row">
+        <div className="kpi-card"><div className="label">Total Financed</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono">{fmt(fleetTotals.totalPaid, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
+      </div>
+      <table style={{ border: '1px solid #ccc' }}>
+        <thead><tr>{['Vehicle', 'Lender', 'Loan Amount', 'Monthly EMI', 'Paid %', 'Principal Balance', 'Interest Balance', 'Next Due'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {loans.map(l => {
+            const s = loanStats(l);
+            return (
+              <tr key={l.id}>
+                <td style={{ border: '1px solid #ccc' }}>{l.modelName}</td>
+                <td style={{ border: '1px solid #ccc' }}>{l.lender || '—'}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(loanAmount(l), currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.monthlyEMI, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{pctStr(s.paidPct)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balancePrincipal, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balanceInterest, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }}>{s.nextDue ? fullDateLabel(s.nextDue.dueDate) : 'Paid off'}</td>
+              </tr>
+            );
+          })}
+          {loans.length === 0 && <tr><td colSpan={8} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No loans added yet.</td></tr>}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1630,7 +1719,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
                     <td className="num">{fmt(s.monthlyEMI, currency)}</td>
                     <td className="num">{pctStr(s.paidPct)}</td>
                     <td className="num">{fmt(s.balancePrincipal, currency)}</td>
-                    <td>{s.nextDue ? <span className={`badge ${s.overdue ? 'neg' : 'pos'}`}>{monthLabel(s.nextDue.dueDate)}{s.overdue ? ' overdue' : ''}</span> : <span className="badge pos">Paid off</span>}</td>
+                    <td>{s.nextDue ? <span className={`badge ${s.overdue ? 'neg' : 'pos'}`}>{fullDateLabel(s.nextDue.dueDate)}{s.overdue ? ' overdue' : ''}</span> : <span className="badge pos">Paid off</span>}</td>
                     <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteLoan(l); }}>✕</button></td>
                   </tr>
                 );
@@ -1677,7 +1766,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
 
   function markPaidThrough() {
     if (!markPaidUpTo) return;
-    onChange({ schedule: loan.schedule.map(r => r.dueDate <= markPaidUpTo ? { ...r, paid: true, paidDate: r.paidDate || (r.dueDate + '-01') } : r) });
+    onChange({ schedule: loan.schedule.map(r => r.dueDate.slice(0, 7) <= markPaidUpTo ? { ...r, paid: true, paidDate: r.paidDate || r.dueDate } : r) });
   }
 
   function applyBulk() {
@@ -1752,7 +1841,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
               <option value="years">Years</option>
             </select>
           </div>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Start Date</label><input type="month" value={loan.startDate} onChange={e => onChange({ startDate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Start Date (exact auto-debit day)</label><input type="date" value={loan.startDate && loan.startDate.length === 7 ? loan.startDate + '-01' : loan.startDate} onChange={e => onChange({ startDate: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Loan Amount</label><input disabled value={fmt(loanAmount(loan), currency)} /></div>
         </div>
         <button className="btn primary" style={{ marginTop: 10 }} onClick={regenerate}>{loan.schedule.length ? 'Regenerate Schedule' : 'Generate Schedule'}</button>
@@ -1764,7 +1853,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
             <div className="kpi-card"><div className="label">Monthly EMI</div><div className="value mono">{fmt(stats.monthlyEMI, currency)}</div></div>
             <div className="kpi-card"><div className="label">Principal Balance</div><div className="value mono">{fmt(stats.balancePrincipal, currency)}</div></div>
             <div className="kpi-card"><div className="label">Interest Balance</div><div className="value mono">{fmt(stats.balanceInterest, currency)}</div></div>
-            <div className="kpi-card"><div className="label">Payoff Date</div><div className="value mono" style={{ fontSize: 18 }}>{stats.payoffDate ? monthLabel(stats.payoffDate) : '—'}</div></div>
+            <div className="kpi-card"><div className="label">Payoff Date</div><div className="value mono" style={{ fontSize: 18 }}>{stats.payoffDate ? fullDateLabel(stats.payoffDate) : '—'}</div></div>
             {stats.overdue && <div className="kpi-card" style={{ borderLeft: '4px solid var(--red)' }}><div className="label">Status</div><div className="value mono" style={{ color: 'var(--red)', fontSize: 16 }}>Overdue</div></div>}
           </div>
 
@@ -1827,9 +1916,9 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
                 <thead><tr><th>#</th><th>Due Date</th><th className="num">Principal</th><th className="num">Interest</th><th className="num">Total</th><th>Paid</th><th>Paid Date</th></tr></thead>
                 <tbody>
                   {loan.schedule.map(r => (
-                    <tr key={r.id} style={{ background: !r.paid && r.dueDate < new Date().toISOString().slice(0, 7) ? '#FDEDEC' : undefined }}>
+                    <tr key={r.id} style={{ background: !r.paid && r.dueDate < new Date().toISOString().slice(0, 10) ? '#FDEDEC' : undefined }}>
                       <td>{r.number}</td>
-                      <td><input type="month" value={r.dueDate} onChange={e => updateRow(r.id, 'dueDate', e.target.value)} style={{ width: 120 }} /></td>
+                      <td><input type="date" value={r.dueDate && r.dueDate.length === 7 ? r.dueDate + '-01' : r.dueDate} onChange={e => updateRow(r.id, 'dueDate', e.target.value)} style={{ width: 130 }} /></td>
                       <td className="num"><input type="number" value={r.principal} onChange={e => updateRow(r.id, 'principal', e.target.value)} /></td>
                       <td className="num"><input type="number" value={r.interest} onChange={e => updateRow(r.id, 'interest', e.target.value)} /></td>
                       <td className="num">{fmt(num(r.principal) + num(r.interest), currency)}</td>
@@ -1884,7 +1973,7 @@ function LoanScheduleReport({ loan, companyName, currency }) {
           <tr><td>Lender</td><td className="num">{loan.lender || '—'}</td><td>Car Value</td><td className="num">{fmt(loan.carValue, currency)}</td></tr>
           <tr><td>Down Payment</td><td className="num">{fmt(loan.downPayment, currency)}</td><td>Loan Amount</td><td className="num">{fmt(loanAmount(loan), currency)}</td></tr>
           <tr><td>Interest Rate</td><td className="num">{loan.interestRate}%</td><td>Term</td><td className="num">{loanTermMonths(loan)} months</td></tr>
-          <tr><td>Start Date</td><td className="num">{monthLabel(loan.startDate)}</td><td>Payoff Date</td><td className="num">{stats.payoffDate ? monthLabel(stats.payoffDate) : '—'}</td></tr>
+          <tr><td>Start Date</td><td className="num">{fullDateLabel(loan.startDate)}</td><td>Payoff Date</td><td className="num">{stats.payoffDate ? fullDateLabel(stats.payoffDate) : '—'}</td></tr>
         </tbody>
       </table>
 
@@ -1903,7 +1992,7 @@ function LoanScheduleReport({ loan, companyName, currency }) {
           {loan.schedule.map(r => (
             <tr key={r.id}>
               <td style={{ border: '1px solid #ccc' }}>{r.number}</td>
-              <td style={{ border: '1px solid #ccc' }}>{monthLabel(r.dueDate)}</td>
+              <td style={{ border: '1px solid #ccc' }}>{fullDateLabel(r.dueDate)}</td>
               <td style={{ border: '1px solid #ccc' }} className="num">{fmt(r.principal, currency)}</td>
               <td style={{ border: '1px solid #ccc' }} className="num">{fmt(r.interest, currency)}</td>
               <td style={{ border: '1px solid #ccc' }} className="num">{fmt(num(r.principal) + num(r.interest), currency)}</td>
