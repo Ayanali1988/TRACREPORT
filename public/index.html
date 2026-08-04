@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fleet Financial Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Inter',sans-serif; background:#F2F3F0; color:#1D2330; }
+  :root { --bg:#F2F3F0; --panel:#FFFFFF; --ink:#1D2330; --muted:#6B7380; --line:#E2E4DE;
+    --navy:#161B26; --steel:#2D6E8E; --green:#3E9C6E; --amber:#D98E3F; --red:#C1503F; }
+  h1,h2,h3,.display { font-family:'Oswald',sans-serif; letter-spacing:0.02em; margin:0; }
+  .mono { font-family:'Roboto Mono',monospace; font-weight:700; font-variant-numeric: tabular-nums; }
+  .app { display:flex; min-height:100vh; }
+  .sidebar { width:200px; background:var(--navy); color:#fff; display:flex; flex-direction:column; padding:18px 12px; flex-shrink:0; }
+  .brand { display:flex; align-items:center; gap:8px; font-family:'Oswald',sans-serif; font-size:18px; font-weight:700; padding:0 6px 16px 6px; border-bottom:1px solid rgba(255,255,255,0.12); margin-bottom:12px; }
+  .navbtn { display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none; color:rgba(255,255,255,0.72); padding:9px 10px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; margin-bottom:2px; }
+  .navbtn:hover { background:rgba(255,255,255,0.06); color:#fff; }
+  .navbtn.active { background:var(--steel); color:#fff; }
+  .sidebar-footer { margin-top:auto; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12); font-size:11px; color:rgba(255,255,255,0.5); }
+  .content { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 22px; background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .topbar .filters { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; }
+  .field label { font-size:11px; color:var(--muted); display:block; margin-bottom:3px; text-transform:uppercase; letter-spacing:0.04em; }
+  .field input, .field select { border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:13px; box-sizing:border-box; }
+  .actions { display:flex; gap:8px; }
+  .btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:#fff; padding:7px 12px; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; color:var(--ink); }
+  .btn:hover { border-color:var(--steel); color:var(--steel); }
+  .btn.primary { background:var(--steel); border-color:var(--steel); color:#fff; }
+  .btn.primary:hover { opacity:0.9; color:#fff; }
+  .btn.danger { color:var(--red); border-color:var(--red); }
+  .btn.small { padding:4px 9px; font-size:12px; }
+  .main-scroll { flex:1; overflow:auto; padding:20px 22px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .panel h3 { font-size:13.5px; margin:0 0 12px 0; display:flex; align-items:center; gap:7px; text-transform:uppercase; letter-spacing:0.04em; }
+  .kpi-row { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:14px; margin-bottom:16px; }
+  .kpi-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:13px 15px; }
+  .kpi-card .label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px; }
+  .kpi-card .value { font-size:20px; }
+  .kpi-card .sub { font-size:11.5px; margin-top:4px; }
+  .kpi-card .sub.pos { color:var(--green); } .kpi-card .sub.neg { color:var(--red); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.02em; padding:6px 7px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:5px 7px; border-bottom:1px solid #EEEFEA; white-space:nowrap; }
+  tr.section-row td { font-weight:700; background:#F7F8F5; text-transform:uppercase; font-size:11px; letter-spacing:0.03em; color:var(--steel); }
+  tr.subtotal-row td { font-weight:700; background:#FBFAF6; }
+  tr.net-row td { font-weight:700; background:#EFF4F1; color:var(--steel); font-size:13.5px; }
+  .num { font-family:'Roboto Mono',monospace; text-align:right; font-variant-numeric:tabular-nums; }
+  td input { width:88px; border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; box-sizing:border-box; font-family:'Roboto Mono',monospace; text-align:right; }
+  .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; border-radius:20px; font-size:11px; font-weight:600; }
+  .badge.pos { background:rgba(62,156,110,0.12); color:var(--green); }
+  .badge.neg { background:rgba(193,80,63,0.12); color:var(--red); }
+  .empty-state { text-align:center; padding:50px 20px; color:var(--muted); }
+  .chip { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:20px; padding:5px 11px; font-size:12.5px; cursor:pointer; background:#fff; }
+  .chip.selected { background:var(--steel); color:#fff; border-color:var(--steel); }
+  .add-row { display:flex; gap:6px; margin-top:6px; }
+  .add-row input { flex:1; border:1px solid var(--line); border-radius:6px; padding:5px 8px; font-size:12.5px; }
+  .icon-btn { background:none; border:1px solid var(--line); cursor:pointer; color:var(--muted); padding:4px 7px; border-radius:5px; font-size:12px; }
+  .icon-btn:hover { background:#F0F1EC; color:var(--red); border-color:var(--red); }
+  .grid-2 { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
+  .bar-chart { display:flex; align-items:flex-end; gap:10px; height:200px; padding-top:10px; overflow-x:auto; }
+  .bar-group { display:flex; flex-direction:column; align-items:center; min-width:56px; }
+  .bar-set { display:flex; align-items:flex-end; gap:3px; height:160px; }
+  .bar { width:16px; border-radius:3px 3px 0 0; }
+  .bar-label { font-size:10.5px; color:var(--muted); margin-top:6px; text-align:center; }
+  .hbar-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .hbar-track { flex:1; background:#EEEFEA; border-radius:4px; height:14px; overflow:hidden; }
+  .hbar-fill { height:100%; border-radius:4px; }
+  .hbar-name { width:150px; font-size:12px; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; }
+  .hbar-val { width:44px; text-align:right; font-size:11.5px; font-family:'Roboto Mono',monospace; flex-shrink:0; }
+  .login-screen { display:flex; align-items:center; justify-content:center; min-height:100vh; background:var(--navy); }
+  .login-box { background:#fff; border-radius:12px; padding:34px; width:340px; text-align:center; }
+  .login-box input { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 12px; font-size:14px; margin:14px 0; box-sizing:border-box; }
+  .print-only { display:none; }
+  @media print {
+    .no-print { display:none !important; }
+    .print-only { display:block !important; }
+    body { background:#fff; }
+    .app { display:block; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, Fragment } = React;
+
+/* ---------------- chart of accounts defaults ---------------- */
+const defaultLineItems = () => ({
+  revenue: [
+    { key: 'rentalDaily', label: 'Rental income - Daily basis' },
+    { key: 'rentalMonthly', label: 'Rental income - Monthly basis' },
+    { key: 'rentalSubLease', label: 'Rental income - Sub Lease' },
+    { key: 'otherIncome', label: 'Other Income' },
+  ],
+  direct: [
+    { key: 'subLeaseCharges', label: 'Sub lease charges' },
+    { key: 'salaryCost', label: 'Salary cost' },
+    { key: 'staffBenefits', label: 'Staff benefits' },
+    { key: 'commissionOwn', label: 'Commission on our vehicles' },
+    { key: 'commissionSub', label: 'Commission on subleased vehicles' },
+    { key: 'registrationCost', label: 'Registration cost' },
+    { key: 'trackingCharges', label: 'Tracking charges' },
+    { key: 'insuranceCharges', label: 'Insurance charges' },
+    { key: 'vehicleMaintenance', label: 'Vehicle maintenance' },
+    { key: 'otherIncomeCost', label: 'Other income - cost' },
+  ],
+  indirect: [
+    { key: 'rentOffice', label: 'Rent - Office' },
+    { key: 'salaryOffice', label: 'Salary - Office' },
+    { key: 'staffBenefitOffice', label: 'Staff benefit (Medical/Ticket)' },
+    { key: 'gratuity', label: 'Gratuity & Leave Salary' },
+    { key: 'visaRenewal', label: 'Visa Renewal Staff' },
+    { key: 'licenseRenewal', label: 'License Renewal Fee' },
+    { key: 'utilities', label: 'Communication / Utility Bills' },
+    { key: 'softwareRenewal', label: 'Software Renewal' },
+    { key: 'auditFee', label: 'Annual Audit Fee' },
+    { key: 'advertisement', label: 'Advertisement & Promotion' },
+    { key: 'printing', label: 'Printing and Stationery' },
+    { key: 'officeExpenses', label: 'Office Expenses' },
+    { key: 'badDebts', label: 'Provision for Bad Debts' },
+  ],
+  interest: [
+    { key: 'interestLoan', label: 'Interest / Loan / Financing' },
+    { key: 'bankCharges', label: 'Bank Charges' },
+  ],
+  belowLine: [
+    { key: 'profitOnSale', label: 'Profit on Sale of Vehicles' },
+  ],
+});
+
+const SECTION_META = {
+  revenue: { title: 'Revenue', kind: 'income' },
+  direct: { title: 'Direct Expenses', kind: 'expense' },
+  indirect: { title: 'Indirect Expenses', kind: 'expense' },
+  interest: { title: 'Interest & Bank Charges', kind: 'expense' },
+  belowLine: { title: 'Other (Below the Line)', kind: 'income' },
+};
+
+const COLORS = ['#2D6E8E', '#3E9C6E', '#D98E3F', '#8C6BB1', '#C1503F', '#4E5D78'];
+
+function uid(p) { return p + '_' + Math.random().toString(36).slice(2, 9); }
+function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
+function monthsOf(year) { return Array.from({ length: 12 }, (_, i) => year + '-' + String(i + 1).padStart(2, '0')); }
+function monthLabel(period) {
+  const [y, m] = period.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleString('default', { month: 'short' }) + '-' + String(y).slice(2);
+}
+function fmt(n, currency) { return currency + ' ' + Math.round(num(n)).toLocaleString(); }
+function pctStr(n) { return isFinite(n) ? (n * 100).toFixed(1) + '%' : '—'; }
+
+function computeMonth(period, monthlyData, lineItems) {
+  const md = monthlyData[period] || {};
+  const val = (key, field) => num((md[key] || {})[field]);
+  const sumSec = (arr, field) => arr.reduce((s, i) => s + val(i.key, field), 0);
+  const res = {};
+  ['budget', 'actual'].forEach(f => {
+    res['income_' + f] = sumSec(lineItems.revenue, f);
+    res['direct_' + f] = sumSec(lineItems.direct, f);
+    res['gross_' + f] = res['income_' + f] - res['direct_' + f];
+    res['indirect_' + f] = sumSec(lineItems.indirect, f);
+    res['ebitda_' + f] = res['gross_' + f] - res['indirect_' + f];
+    res['interest_' + f] = sumSec(lineItems.interest, f);
+    res['belowline_' + f] = sumSec(lineItems.belowLine, f);
+    res['totalexp_' + f] = res['direct_' + f] + res['indirect_' + f] + res['interest_' + f];
+    res['netprofit_' + f] = res['ebitda_' + f] - res['interest_' + f] + res['belowline_' + f];
+    res['grossPct_' + f] = res['income_' + f] ? res['gross_' + f] / res['income_' + f] : 0;
+    res['netPct_' + f] = res['income_' + f] ? res['netprofit_' + f] / res['income_' + f] : 0;
+  });
+  return res;
+}
+
+function rangeAggregate(monthKeys, monthlyData, lineItems) {
+  const totals = {};
+  monthKeys.forEach(p => {
+    const c = computeMonth(p, monthlyData, lineItems);
+    Object.keys(c).forEach(k => {
+      if (k.endsWith('Pct_budget') || k.endsWith('Pct_actual')) return;
+      totals[k] = (totals[k] || 0) + c[k];
+    });
+  });
+  totals.grossPct_budget = totals.income_budget ? totals.gross_budget / totals.income_budget : 0;
+  totals.grossPct_actual = totals.income_actual ? totals.gross_actual / totals.income_actual : 0;
+  totals.netPct_budget = totals.income_budget ? totals.netprofit_budget / totals.income_budget : 0;
+  totals.netPct_actual = totals.income_actual ? totals.netprofit_actual / totals.income_actual : 0;
+  return totals;
+}
+
+function rowVariance(budget, actual, kind) {
+  const variance = kind === 'expense' ? (budget - actual) : (actual - budget);
+  const pct = budget !== 0 ? variance / Math.abs(budget) : null;
+  return { variance, pct, favorable: variance >= 0 };
+}
+
+function confirmDelete(label, deletePin) {
+  if (!window.confirm('Delete "' + label + '"? This cannot be undone.')) return false;
+  if (deletePin) {
+    const entered = window.prompt('Enter the security PIN to confirm deletion:');
+    if (entered !== deletePin) { window.alert('Incorrect PIN — deletion cancelled.'); return false; }
+  }
+  return true;
+}
+
+/* ---------------- small chart components (dependency-free) ---------------- */
+
+function GroupedBarChart({ data, series, height = 200 }) {
+  const max = Math.max(1, ...data.flatMap(d => series.map(s => Math.abs(d[s.key]) || 0)));
+  return (
+    <div className="bar-chart" style={{ height: height + 40 }}>
+      {data.map((d, i) => (
+        <div className="bar-group" key={i}>
+          <div className="bar-set" style={{ height }}>
+            {series.map((s, j) => (
+              <div key={j} className="bar" title={s.label + ': ' + d[s.key]}
+                style={{ height: Math.max(2, Math.abs(d[s.key]) / max * height) + 'px', background: s.color }} />
+            ))}
+          </div>
+          <div className="bar-label">{d.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HBarList({ data, maxVal }) {
+  const max = maxVal || Math.max(1, ...data.map(d => d.value));
+  return (
+    <div>
+      {data.map((d, i) => (
+        <div className="hbar-row" key={i}>
+          <div className="hbar-name" title={d.name}>{d.name}</div>
+          <div className="hbar-track"><div className="hbar-fill" style={{ width: (d.value / max * 100) + '%', background: d.color || '#2D6E8E' }} /></div>
+          <div className="hbar-val">{d.display !== undefined ? d.display : d.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LineTrendSVG({ data, series, width = 640, height = 220 }) {
+  const allVals = data.flatMap(d => series.map(s => d[s.key] || 0));
+  const max = Math.max(...allVals, 0);
+  const min = Math.min(...allVals, 0);
+  const range = (max - min) || 1;
+  const n = Math.max(data.length - 1, 1);
+  const toXY = (i, v) => [ (i / n) * (width - 40) + 30, height - 20 - ((v - min) / range) * (height - 40) ];
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
+      <line x1="30" y1={height - 20} x2={width - 10} y2={height - 20} stroke="#E2E4DE" />
+      {series.map((s, si) => {
+        const pts = data.map((d, i) => toXY(i, d[s.key] || 0).join(',')).join(' ');
+        return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth="2" strokeDasharray={s.dashed ? '5,4' : '0'} />;
+      })}
+      {data.map((d, i) => {
+        const [x] = toXY(i, 0);
+        return <text key={i} x={x} y={height - 4} fontSize="10" fill="#6B7380" textAnchor="middle">{d.label}</text>;
+      })}
+    </svg>
+  );
+}
+
+/* ---------------- root app ---------------- */
+
+function App() {
+  const [authed, setAuthed] = useState(false);
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [loaded, setLoaded] = useState(false);
+
+  const [companyName, setCompanyName] = useState('My Rent A Car LLC');
+  const [year, setYear] = useState('2026');
+  const [currency, setCurrency] = useState('AED');
+  const [baseDays, setBaseDays] = useState(22);
+  const [deletePin, setDeletePin] = useState('');
+  const [lineItems, setLineItems] = useState(defaultLineItems());
+  const [monthlyData, setMonthlyData] = useState({});
+  const [vehicles, setVehicles] = useState([]);
+  const [occupancy, setOccupancy] = useState({});
+
+  const [reportFrom, setReportFrom] = useState(year + '-01');
+  const [reportTo, setReportTo] = useState(year + '-12');
+  const [activeTab, setActiveTab] = useState('pnl-entry');
+
+  async function apiCall(method, body) {
+    const res = await fetch('/api/data', {
+      method,
+      headers: { 'content-type': 'application/json', 'x-app-password': password },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 401) throw new Error('unauthorized');
+    return res.json();
+  }
+
+  async function tryLogin(pw) {
+    setAuthError('');
+    try {
+      const savedPw = pw;
+      const res = await fetch('/api/data', { headers: { 'x-app-password': savedPw } });
+      if (res.status === 401) { setAuthError('Incorrect password.'); return; }
+      const data = await res.json();
+      if (data) {
+        if (data.companyName) setCompanyName(data.companyName);
+        if (data.year) setYear(data.year);
+        if (data.currency) setCurrency(data.currency);
+        if (data.baseDays) setBaseDays(data.baseDays);
+        if (data.deletePin !== undefined) setDeletePin(data.deletePin);
+        if (data.lineItems) setLineItems(data.lineItems);
+        if (data.monthlyData) setMonthlyData(data.monthlyData);
+        if (data.vehicles) setVehicles(data.vehicles);
+        if (data.occupancy) setOccupancy(data.occupancy);
+        if (data.reportFrom) setReportFrom(data.reportFrom);
+        if (data.reportTo) setReportTo(data.reportTo);
+      }
+      setPassword(savedPw);
+      sessionStorage.setItem('fleet_app_pw', savedPw);
+      setAuthed(true);
+      setLoaded(true);
+    } catch (e) {
+      setAuthError('Could not reach the server. Check your connection and try again.');
+    }
+  }
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('fleet_app_pw');
+    if (saved !== null) tryLogin(saved);
+  }, []);
+
+  useEffect(() => {
+    if (!loaded || !authed) return;
+    const t = setTimeout(() => {
+      apiCall('POST', { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo })
+        .catch(e => console.error('save failed', e));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo, loaded, authed]);
+
+  const monthKeys = useMemo(() => monthsOf(year), [year]);
+  const rangeMonths = useMemo(() => monthKeys.filter(p => p >= reportFrom && p <= reportTo), [monthKeys, reportFrom, reportTo]);
+
+  function handlePrint() {
+    setActiveTab('full-report');
+    setTimeout(() => window.print(), 200);
+  }
+
+  function exportExcel() {
+    const wb = XLSX.utils.book_new();
+    const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+
+    const summaryRows = [
+      ['Company', companyName], ['Period', rangeMonths.map(monthLabel).join(', ')], [],
+      ['Metric', 'Budget', 'Actual', 'Variance'],
+      ['Total Income', totals.income_budget, totals.income_actual, totals.income_actual - totals.income_budget],
+      ['Total Direct Expenses', totals.direct_budget, totals.direct_actual, totals.direct_budget - totals.direct_actual],
+      ['Gross Profit', totals.gross_budget, totals.gross_actual, totals.gross_actual - totals.gross_budget],
+      ['Total Indirect Expenses', totals.indirect_budget, totals.indirect_actual, totals.indirect_budget - totals.indirect_actual],
+      ['EBITDA', totals.ebitda_budget, totals.ebitda_actual, totals.ebitda_actual - totals.ebitda_budget],
+      ['Total Interest & Bank Charges', totals.interest_budget, totals.interest_actual, totals.interest_budget - totals.interest_actual],
+      ['Net Profit', totals.netprofit_budget, totals.netprofit_actual, totals.netprofit_actual - totals.netprofit_budget],
+      ['Gross Margin %', pctStr(totals.grossPct_budget), pctStr(totals.grossPct_actual), ''],
+      ['Net Margin %', pctStr(totals.netPct_budget), pctStr(totals.netPct_actual), ''],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
+
+    const detailHeader = ['Particulars', ...rangeMonths.flatMap(p => [monthLabel(p) + ' Budget', monthLabel(p) + ' Actual'])];
+    const detailRows = [detailHeader];
+    const pushSection = (sec, subtotalLabel, subtotalKey) => {
+      lineItems[sec].forEach(item => {
+        detailRows.push([item.label, ...rangeMonths.flatMap(p => {
+          const md = (monthlyData[p] || {})[item.key] || {};
+          return [num(md.budget), num(md.actual)];
+        })]);
+      });
+      if (subtotalLabel) detailRows.push([subtotalLabel, ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c[subtotalKey + '_budget'], c[subtotalKey + '_actual']]; })]);
+    };
+    pushSection('revenue', 'Total Income', 'income');
+    pushSection('direct', 'Total Direct Expenses', 'direct');
+    detailRows.push(['Gross Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.gross_budget, c.gross_actual]; })]);
+    pushSection('indirect', 'Total Indirect Expenses', 'indirect');
+    detailRows.push(['EBITDA', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.ebitda_budget, c.ebitda_actual]; })]);
+    pushSection('interest', 'Total Interest & Bank Charges', 'interest');
+    pushSection('belowLine', null, null);
+    detailRows.push(['Net Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.netprofit_budget, c.netprofit_actual]; })]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), 'PnL Detail');
+
+    const occRows = [['Car', 'Plate', ...rangeMonths.map(monthLabel), 'AVG %', 'Remarks']];
+    vehicles.forEach(v => {
+      const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
+      const valid = pcts.filter(x => x !== null);
+      const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+      occRows.push([v.name, v.plate, ...pcts.map(p => p === null ? '' : (p * 100).toFixed(0) + '%'), avg === null ? '' : (avg * 100).toFixed(0) + '%', avg === null ? '' : (avg >= 0.5 ? 'OK' : 'Workout')]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(occRows), 'Occupancy Matrix');
+
+    const buckets = { '0-30%': 0, '31-50%': 0, '51-75%': 0, '76-100%+': 0 };
+    vehicles.forEach(v => {
+      const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; }).filter(x => x !== null);
+      if (!pcts.length) return;
+      const avg = pcts.reduce((a, b) => a + b, 0) / pcts.length;
+      if (avg < 0.3) buckets['0-30%']++; else if (avg < 0.5) buckets['31-50%']++; else if (avg < 0.75) buckets['51-75%']++; else buckets['76-100%+']++;
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Bucket', 'Vehicle Count'], ...Object.entries(buckets)]), 'Occupancy Distribution');
+
+    XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-fleet-report-${reportFrom}_to_${reportTo}.xlsx`);
+  }
+
+  if (!authed) {
+    return (
+      <div className="login-screen">
+        <div className="login-box">
+          <h2 style={{ marginBottom: 6 }}>🚗 Fleet Financial Report</h2>
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>Enter the site password to continue</p>
+          <input type="password" placeholder="Password" value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password); }} />
+          {authError && <div style={{ color: 'var(--red)', fontSize: 12.5, marginBottom: 10 }}>{authError}</div>}
+          <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => tryLogin(password)}>Enter</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app">
+      <aside className="sidebar no-print">
+        <div className="brand">🚗 <span>FleetIQ</span></div>
+        <nav>
+          <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>
+          <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
+          <button className={`navbtn ${activeTab === 'occ-entry' ? 'active' : ''}`} onClick={() => setActiveTab('occ-entry')}>⏱ Occupancy Entry</button>
+          <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
+          <button className={`navbtn ${activeTab === 'vehicles' ? 'active' : ''}`} onClick={() => setActiveTab('vehicles')}>🚙 Vehicles</button>
+          <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
+          <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
+        </nav>
+        <div className="sidebar-footer">Signed in · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); setAuthed(false); setPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span></div>
+      </aside>
+
+      <div className="content">
+        <header className="topbar no-print">
+          <div>
+            <div className="display" style={{ fontSize: 16 }}>{companyName}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Fleet Financial Report — {year}</div>
+          </div>
+          <div className="filters">
+            <div className="field"><label>Report From</label><input type="month" value={reportFrom} onChange={e => setReportFrom(e.target.value)} /></div>
+            <div className="field"><label>Report To</label><input type="month" value={reportTo} onChange={e => setReportTo(e.target.value)} /></div>
+          </div>
+          <div className="actions">
+            <button className="btn" onClick={exportExcel}>📥 Export Excel</button>
+            <button className="btn" onClick={handlePrint}>🖨 Export PDF</button>
+          </div>
+        </header>
+
+        <div className="main-scroll">
+          {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />}
+          {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
+          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} />}
+          {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} />}
+          {activeTab === 'full-report' && <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+        </div>
+      </div>
+
+      <div className="print-only">
+        <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, sub, diff }) {
+  return (
+    <div className="kpi-card">
+      <div className="label">{label}</div>
+      <div className="value mono">{value}</div>
+      <div className={`sub ${diff >= 0 ? 'pos' : 'neg'}`}>{diff >= 0 ? '▲' : '▼'} {sub}</div>
+    </div>
+  );
+}
+
+/* ---------------- P&L Entry ---------------- */
+
+function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin }) {
+  const [period, setPeriod] = useState(monthKeys[0]);
+  const [newItemText, setNewItemText] = useState({});
+
+  function setCell(itemKey, field, value) {
+    setMonthlyData(prev => {
+      const md = { ...(prev[period] || {}) };
+      md[itemKey] = { ...(md[itemKey] || {}), [field]: value };
+      return { ...prev, [period]: md };
+    });
+  }
+  function addItem(sectionKey) {
+    const label = (newItemText[sectionKey] || '').trim();
+    if (!label) return;
+    setLineItems(prev => ({ ...prev, [sectionKey]: [...prev[sectionKey], { key: uid('item'), label }] }));
+    setNewItemText({ ...newItemText, [sectionKey]: '' });
+  }
+  function removeItem(sectionKey, key, label) {
+    if (!confirmDelete(label, deletePin)) return;
+    setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].filter(i => i.key !== key) }));
+  }
+
+  const c = computeMonth(period, monthlyData, lineItems);
+
+  const renderSection = (sectionKey) => (
+    <div className="panel" key={sectionKey}>
+      <table>
+        <thead><tr><th>{SECTION_META[sectionKey].title}</th><th className="num">Budget ({currency})</th><th className="num">Actual ({currency})</th><th></th></tr></thead>
+        <tbody>
+          {lineItems[sectionKey].map(item => {
+            const cellVal = (monthlyData[period] || {})[item.key] || {};
+            return (
+              <tr key={item.key}>
+                <td>{item.label}</td>
+                <td className="num"><input type="number" value={cellVal.budget || ''} onChange={e => setCell(item.key, 'budget', e.target.value)} /></td>
+                <td className="num"><input type="number" value={cellVal.actual || ''} onChange={e => setCell(item.key, 'actual', e.target.value)} /></td>
+                <td><button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)}>✕</button></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="add-row">
+        <input placeholder={`Add item to ${SECTION_META[sectionKey].title}…`} value={newItemText[sectionKey] || ''}
+          onChange={e => setNewItemText({ ...newItemText, [sectionKey]: e.target.value })}
+          onKeyDown={e => { if (e.key === 'Enter') addItem(sectionKey); }} />
+        <button className="btn small" onClick={() => addItem(sectionKey)}>+ Add</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="field" style={{ maxWidth: 220 }}>
+          <label>Month</label>
+          <select value={period} onChange={e => setPeriod(e.target.value)}>
+            {monthKeys.map(p => <option key={p} value={p}>{monthLabel(p)}</option>)}
+          </select>
+        </div>
+      </div>
+      {renderSection('revenue')}
+      {renderSection('direct')}
+      {renderSection('indirect')}
+      {renderSection('interest')}
+      {renderSection('belowLine')}
+      <div className="kpi-row">
+        <KpiCard label="Total Income" value={fmt(c.income_actual, currency)} sub={`Budget ${fmt(c.income_budget, currency)}`} diff={c.income_actual - c.income_budget} />
+        <KpiCard label="Gross Profit" value={fmt(c.gross_actual, currency)} sub={`Budget ${fmt(c.gross_budget, currency)}`} diff={c.gross_actual - c.gross_budget} />
+        <KpiCard label="EBITDA" value={fmt(c.ebitda_actual, currency)} sub={`Budget ${fmt(c.ebitda_budget, currency)}`} diff={c.ebitda_actual - c.ebitda_budget} />
+        <KpiCard label="Net Profit" value={fmt(c.netprofit_actual, currency)} sub={`Budget ${fmt(c.netprofit_budget, currency)}`} diff={c.netprofit_actual - c.netprofit_budget} />
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- P&L Compare (uses global report range) ---------------- */
+
+function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
+  const yearData = monthKeys.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
+
+  const allRows = useMemo(() => {
+    const rows = [];
+    ['revenue', 'direct', 'indirect', 'interest', 'belowLine'].forEach(sec => {
+      rows.push({ type: 'section', label: SECTION_META[sec].title });
+      lineItems[sec].forEach(item => rows.push({ type: 'item', key: item.key, label: item.label, kind: SECTION_META[sec].kind }));
+      if (sec === 'revenue') rows.push({ type: 'subtotal', key: 'income', label: 'Total Income', kind: 'income' });
+      if (sec === 'direct') { rows.push({ type: 'subtotal', key: 'direct', label: 'Total Direct Expenses', kind: 'expense' }); rows.push({ type: 'subtotal', key: 'gross', label: 'Gross Profit', kind: 'income' }); }
+      if (sec === 'indirect') { rows.push({ type: 'subtotal', key: 'indirect', label: 'Total Indirect Expenses', kind: 'expense' }); rows.push({ type: 'subtotal', key: 'ebitda', label: 'EBITDA', kind: 'income' }); }
+      if (sec === 'interest') rows.push({ type: 'subtotal', key: 'interest', label: 'Total Interest & Bank Charges', kind: 'expense' });
+    });
+    rows.push({ type: 'net', key: 'netprofit', label: 'Net Profit', kind: 'income' });
+    return rows;
+  }, [lineItems]);
+
+  if (monthKeys.length === 0) return <div className="empty-state">No months in the selected report range.</div>;
+
+  return (
+    <div>
+      <div className="grid-2">
+        <div className="panel">
+          <h3>Income &amp; Net Profit Trend</h3>
+          <LineTrendSVG data={yearData} series={[
+            { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+            { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
+            { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+            { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
+          ]} />
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>■ Green = Income · ■ Blue = Net Profit · dashed = Budget</div>
+        </div>
+        <div className="panel">
+          <h3>Budget vs Actual Income</h3>
+          <GroupedBarChart data={yearData} series={[
+            { key: 'income_budget', label: 'Budget Income', color: '#B9DCC7' },
+            { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+            { key: 'totalexp_budget', label: 'Budget Expense', color: '#EFC8B9' },
+            { key: 'totalexp_actual', label: 'Actual Expense', color: '#C1503F' },
+          ]} />
+        </div>
+      </div>
+
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Line-by-Line Comparison</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Particulars</th>
+              {monthKeys.map(p => (
+                <Fragment key={p}>
+                  <th className="num">{monthLabel(p)} Budget</th>
+                  <th className="num">{monthLabel(p)} Actual</th>
+                  <th className="num">Var %</th>
+                </Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {allRows.map((row, idx) => {
+              if (row.type === 'section') return <tr key={idx} className="section-row"><td colSpan={1 + monthKeys.length * 3}>{row.label}</td></tr>;
+              const rowClass = row.type === 'net' ? 'net-row' : row.type === 'subtotal' ? 'subtotal-row' : '';
+              return (
+                <tr key={idx} className={rowClass}>
+                  <td>{row.label}</td>
+                  {monthKeys.map(p => {
+                    let budget, actual;
+                    if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget = num(md.budget); actual = num(md.actual); }
+                    else { const c = computeMonth(p, monthlyData, lineItems); budget = c[row.key + '_budget']; actual = c[row.key + '_actual']; }
+                    const v = rowVariance(budget, actual, row.kind);
+                    return (
+                      <Fragment key={p}>
+                        <td className="num">{fmt(budget, currency)}</td>
+                        <td className="num">{fmt(actual, currency)}</td>
+                        <td className="num"><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span></td>
+                      </Fragment>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Occupancy Entry ---------------- */
+
+function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
+  const [period, setPeriod] = useState(monthKeys[0]);
+  const [search, setSearch] = useState('');
+
+  function setDays(vehicleId, value) { setOccupancy(prev => ({ ...prev, [period]: { ...(prev[period] || {}), [vehicleId]: value } })); }
+  function fillAll(value) { setOccupancy(prev => { const m = { ...(prev[period] || {}) }; vehicles.forEach(v => { m[v.id] = value; }); return { ...prev, [period]: m }; }); }
+  const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
+
+  if (vehicles.length === 0) return <div className="empty-state"><h2>Add vehicles first</h2><p>Go to the Vehicles tab to add your fleet.</p></div>;
+
+  return (
+    <div className="panel">
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
+        <div className="field" style={{ maxWidth: 200 }}><label>Month</label><select value={period} onChange={e => setPeriod(e.target.value)}>{monthKeys.map(p => <option key={p} value={p}>{monthLabel(p)}</option>)}</select></div>
+        <div className="field" style={{ maxWidth: 260 }}><label>Search</label><input placeholder="Filter vehicles…" value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <button className="btn small" onClick={() => fillAll(baseDays)}>Mark all fully worked ({baseDays}d)</button>
+        <button className="btn small" onClick={() => fillAll(0)}>Mark all as 0 days</button>
+      </div>
+      <table>
+        <thead><tr><th>Vehicle</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
+        <tbody>
+          {filtered.map(v => {
+            const d = (occupancy[period] || {})[v.id];
+            const pctVal = d !== undefined && d !== '' ? num(d) / baseDays : null;
+            return (
+              <tr key={v.id}>
+                <td>{v.name}</td><td>{v.plate}</td>
+                <td className="num"><input type="number" min="0" value={d === undefined ? '' : d} onChange={e => setDays(v.id, e.target.value)} /></td>
+                <td className="num">{pctVal === null ? '—' : <span className={`badge ${pctVal >= 0.5 ? 'pos' : 'neg'}`}>{pctStr(pctVal)}</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ---------------- Occupancy Report (uses global report range) ---------------- */
+
+function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
+  const rows = vehicles.map(v => {
+    const monthPcts = monthKeys.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
+    const valid = monthPcts.filter(x => x !== null);
+    const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+    return { vehicle: v, monthPcts, avg };
+  });
+  const buckets = { '0-30%': 0, '31-50%': 0, '51-75%': 0, '76-100%+': 0 };
+  rows.forEach(r => { if (r.avg === null) return; if (r.avg < 0.3) buckets['0-30%']++; else if (r.avg < 0.5) buckets['31-50%']++; else if (r.avg < 0.75) buckets['51-75%']++; else buckets['76-100%+']++; });
+  const barData = rows.filter(r => r.avg !== null).map(r => ({ name: r.vehicle.name, value: Math.round(r.avg * 100), display: Math.round(r.avg * 100) + '%', color: r.avg >= 0.5 ? '#3E9C6E' : '#C1503F' })).sort((a, b) => b.value - a.value);
+  const validAvgs = rows.filter(r => r.avg !== null);
+  const fleetAvg = validAvgs.length ? validAvgs.reduce((s, r) => s + r.avg, 0) / validAvgs.length : 0;
+
+  if (vehicles.length === 0) return <div className="empty-state"><h2>No vehicles yet</h2><p>Add your fleet in the Vehicles tab, then log occupancy days.</p></div>;
+
+  return (
+    <div>
+      <div className="kpi-row">
+        <KpiCard label="Fleet Avg Occupancy" value={pctStr(fleetAvg)} sub={`base ${baseDays} days/month`} diff={fleetAvg - 0.5} />
+        <div className="kpi-card"><div className="label">Vehicles Below 50%</div><div className="value mono" style={{ color: 'var(--red)' }}>{rows.filter(r => r.avg !== null && r.avg < 0.5).length}</div></div>
+      </div>
+      <div className="grid-2">
+        <div className="panel"><h3>Occupancy by Vehicle</h3><HBarList data={barData} maxVal={100} /></div>
+        <div className="panel">
+          <h3>Occupancy Distribution</h3>
+          {Object.entries(buckets).map(([name, value], i) => (
+            <div className="hbar-row" key={name}>
+              <div className="hbar-name">{name}</div>
+              <div className="hbar-track"><div className="hbar-fill" style={{ width: (value / Math.max(1, vehicles.length) * 100) + '%', background: COLORS[i % COLORS.length] }} /></div>
+              <div className="hbar-val">{value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Occupancy Matrix</h3>
+        <table>
+          <thead><tr><th>Car</th><th>Plate</th>{monthKeys.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}<th className="num">Avg %</th><th>Remarks</th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.vehicle.id}>
+                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                {r.monthPcts.map((p, i) => <td key={i} className="num">{p === null ? '' : (p * 100).toFixed(0) + '%'}</td>)}
+                <td className="num">{r.avg === null ? '' : (r.avg * 100).toFixed(0) + '%'}</td>
+                <td>{r.avg === null ? '' : <span className={`badge ${r.avg >= 0.5 ? 'pos' : 'neg'}`}>{r.avg >= 0.5 ? 'OK' : 'Workout'}</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Vehicles ---------------- */
+
+function VehiclesPanel({ vehicles, setVehicles, deletePin }) {
+  const [form, setForm] = useState({ name: '', plate: '' });
+  const [bulkText, setBulkText] = useState('');
+  const [search, setSearch] = useState('');
+
+  function addVehicle() { if (!form.name.trim()) return; setVehicles([...vehicles, { id: uid('veh'), ...form }]); setForm({ name: '', plate: '' }); }
+  function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
+  function bulkAdd() {
+    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '' }; });
+    setVehicles([...vehicles, ...nv]); setBulkText('');
+  }
+  const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Add Vehicle</h3>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div className="field" style={{ flex: 1 }}><label>Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Patrol" /></div>
+          <div className="field" style={{ flex: 1 }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
+        </div>
+        <button className="btn primary" style={{ marginTop: 10 }} onClick={addVehicle}>+ Add Vehicle</button>
+      </div>
+      <div className="panel">
+        <h3>Bulk Add</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate</code></p>
+        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Patrol, 9182-G\nGMC Yukon, 9185-G"} />
+        <button className="btn primary" style={{ marginTop: 10 }} onClick={bulkAdd}>+ Add All</button>
+      </div>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Fleet ({vehicles.length})</h3>
+          <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
+        </div>
+        <table>
+          <thead><tr><th>Name</th><th>Plate</th><th></th></tr></thead>
+          <tbody>
+            {filtered.map(v => <tr key={v.id}><td>{v.name}</td><td>{v.plate}</td><td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={() => deleteVehicle(v)}>✕</button></td></tr>)}
+            {filtered.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Settings ---------------- */
+
+function SettingsPanel({ companyName, setCompanyName, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin }) {
+  const [pinInput, setPinInput] = useState(deletePin);
+  return (
+    <div className="panel" style={{ maxWidth: 480 }}>
+      <h3>Report Settings</h3>
+      <div className="field" style={{ marginBottom: 12 }}><label>Company Name (shown on all reports)</label><input value={companyName} onChange={e => setCompanyName(e.target.value)} /></div>
+      <div className="field" style={{ marginBottom: 12 }}><label>Year</label><input value={year} onChange={e => setYear(e.target.value.replace(/\D/g, '').slice(0, 4) || '2026')} /></div>
+      <div className="field" style={{ marginBottom: 12 }}><label>Currency</label><input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 5))} /></div>
+      <div className="field" style={{ marginBottom: 12 }}><label>Base Working Days / Month (for occupancy %)</label><input type="number" value={baseDays} onChange={e => setBaseDays(Math.max(1, num(e.target.value) || 22))} /></div>
+      <div className="field" style={{ marginBottom: 6 }}>
+        <label>Delete Confirmation PIN (optional)</label>
+        <input value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="Leave blank for confirm-only" />
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>When set, deleting a vehicle or line item asks for this PIN in addition to a confirmation — helps prevent accidental data loss.</p>
+      <button className="btn primary" onClick={() => setDeletePin(pinInput)}>Save PIN</button>
+      <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+      <h3>Site Password</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>The password to open this app is set via the <code>APP_PASSWORD</code> environment variable in your Netlify site's dashboard (Site settings → Environment variables). Update it there and redeploy to change it.</p>
+    </div>
+  );
+}
+
+/* ---------------- Import from Excel ---------------- */
+
+function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, monthKeys }) {
+  const [step, setStep] = useState(1);
+  const [sheets, setSheets] = useState({});
+  const [sheetNames, setSheetNames] = useState([]);
+  const [selectedSheet, setSelectedSheet] = useState('');
+  const [rawRows, setRawRows] = useState([]);
+  const [headerRow, setHeaderRow] = useState(0);
+  const [labelCol, setLabelCol] = useState(0);
+  const [colMaps, setColMaps] = useState([]);
+  const [rowMaps, setRowMaps] = useState([]);
+  const [fileName, setFileName] = useState('');
+
+  function normLabel(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+
+  const flatItems = useMemo(() => {
+    const arr = [];
+    Object.keys(lineItems).forEach(sec => lineItems[sec].forEach(it => arr.push({ sectionKey: sec, key: it.key, label: it.label })));
+    return arr;
+  }, [lineItems]);
+
+  function parseNum(v) {
+    if (v === undefined || v === null || v === '') return '';
+    if (typeof v === 'number') return v;
+    let s = String(v).trim();
+    if (!s || s === '-' || /^#/.test(s)) return '';
+    let neg = false;
+    if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+    s = s.replace(/,/g, '').replace(/%/g, '').replace(/[^0-9.\-]/g, '');
+    if (!s) return '';
+    const n = parseFloat(s);
+    if (isNaN(n)) return '';
+    return neg ? -Math.abs(n) : n;
+  }
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = new Uint8Array(evt.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const sheetObj = {};
+      wb.SheetNames.forEach(name => { sheetObj[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' }); });
+      setSheets(sheetObj);
+      setSheetNames(wb.SheetNames);
+      const first = wb.SheetNames[0];
+      setSelectedSheet(first);
+      setRawRows(sheetObj[first]);
+      setHeaderRow(0);
+      setLabelCol(0);
+      setStep(2);
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function selectSheet(name) { setSelectedSheet(name); setRawRows(sheets[name] || []); setHeaderRow(0); setLabelCol(0); }
+
+  function proceedToColumnMapping() {
+    const headerCells = rawRows[headerRow] || [];
+    setColMaps(headerCells.map(() => ({ skip: true, period: monthKeys[0], field: 'budget' })));
+    setStep(3);
+  }
+
+  function proceedToRowMapping() {
+    const dataRows = rawRows.slice(headerRow + 1);
+    const maps = dataRows.map(row => {
+      const label = row[labelCol];
+      if (!label || String(label).trim() === '') return { enabled: false, label: '' };
+      const norm = normLabel(label);
+      const match = flatItems.find(fi => normLabel(fi.label) === norm) ||
+        flatItems.find(fi => norm.length > 3 && (normLabel(fi.label).includes(norm) || norm.includes(normLabel(fi.label))));
+      return { enabled: true, label: String(label), sectionKey: match ? match.sectionKey : 'direct', itemKey: match ? match.key : 'new' };
+    });
+    setRowMaps(maps);
+    setStep(4);
+  }
+
+  function runImport() {
+    let updatedLineItems = { ...lineItems };
+    const newDataByPeriod = {};
+    const dataRows = rawRows.slice(headerRow + 1);
+
+    dataRows.forEach((row, rIdx) => {
+      const rm = rowMaps[rIdx];
+      if (!rm || !rm.enabled) return;
+      let itemKey = rm.itemKey;
+      if (itemKey === 'new') {
+        const newKey = uid('item');
+        updatedLineItems = { ...updatedLineItems, [rm.sectionKey]: [...updatedLineItems[rm.sectionKey], { key: newKey, label: rm.label }] };
+        itemKey = newKey;
+      }
+      colMaps.forEach((cm, cIdx) => {
+        if (!cm || cm.skip || cIdx === labelCol) return;
+        const val = parseNum(row[cIdx]);
+        if (val === '') return;
+        if (!newDataByPeriod[cm.period]) newDataByPeriod[cm.period] = {};
+        if (!newDataByPeriod[cm.period][itemKey]) newDataByPeriod[cm.period][itemKey] = {};
+        newDataByPeriod[cm.period][itemKey][cm.field] = val;
+      });
+    });
+
+    setLineItems(updatedLineItems);
+    setMonthlyData(prev => {
+      const merged = { ...prev };
+      Object.keys(newDataByPeriod).forEach(period => {
+        merged[period] = { ...(merged[period] || {}) };
+        Object.keys(newDataByPeriod[period]).forEach(key => {
+          merged[period][key] = { ...(merged[period][key] || {}), ...newDataByPeriod[period][key] };
+        });
+      });
+      return merged;
+    });
+    setStep(5);
+  }
+
+  function resetImport() { setStep(1); setSheets({}); setSheetNames([]); setSelectedSheet(''); setRawRows([]); setColMaps([]); setRowMaps([]); setFileName(''); }
+
+  return (
+    <div className="panel">
+      <h3>Import Budget / Actuals from Excel</h3>
+
+      {step === 1 && (
+        <div>
+          <p style={{ fontSize: 13, color: 'var(--muted)' }}>Upload your existing Excel budget report. You'll map columns to months and rows to line items before anything is saved — nothing is imported until you confirm on the last step.</p>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} />
+        </div>
+      )}
+
+      {step === 2 && (
+        <div>
+          <p style={{ fontSize: 13 }}>File: <b>{fileName}</b></p>
+          {sheetNames.length > 1 && (
+            <div className="field" style={{ maxWidth: 260, marginBottom: 10 }}>
+              <label>Sheet</label>
+              <select value={selectedSheet} onChange={e => selectSheet(e.target.value)}>
+                {sheetNames.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+            <div className="field"><label>Header row (0-indexed)</label><input type="number" min="0" value={headerRow} onChange={e => setHeaderRow(Math.max(0, num(e.target.value)))} /></div>
+            <div className="field"><label>Label column (0-indexed)</label><input type="number" min="0" value={labelCol} onChange={e => setLabelCol(Math.max(0, num(e.target.value)))} /></div>
+          </div>
+          <div style={{ overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 8, maxHeight: 260 }}>
+            <table>
+              <tbody>
+                {rawRows.slice(0, 14).map((row, ri) => (
+                  <tr key={ri} style={{ background: ri === headerRow ? '#EFF4F1' : undefined }}>
+                    <td className="num" style={{ color: 'var(--muted)' }}>{ri}</td>
+                    {row.map((cell, ci) => <td key={ci} style={{ background: ci === labelCol ? '#FBF4E8' : undefined }}>{String(cell).slice(0, 24)}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ fontSize: 11.5, color: 'var(--muted)' }}>Green row = header · Yellow column = line item labels. Adjust the numbers above if they're not detected correctly.</p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn" onClick={resetImport}>Cancel</button>
+            <button className="btn primary" onClick={proceedToColumnMapping}>Next: Map Columns →</button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div>
+          <p style={{ fontSize: 13, color: 'var(--muted)' }}>For each column, choose which month it represents and whether it's Budget or Actual. Leave "Ignore" for columns like Variance or Remarks.</p>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead><tr><th>Col</th><th>Header Text</th><th>Import</th><th>Month</th><th>Type</th></tr></thead>
+              <tbody>
+                {(rawRows[headerRow] || []).map((cell, ci) => {
+                  if (ci === labelCol) return null;
+                  const cm = colMaps[ci] || { skip: true };
+                  return (
+                    <tr key={ci}>
+                      <td className="num">{ci}</td>
+                      <td>{String(cell).slice(0, 30)}</td>
+                      <td>
+                        <select value={cm.skip ? 'ignore' : 'use'} onChange={e => { const v = e.target.value; setColMaps(prev => prev.map((c, idx) => idx === ci ? { ...c, skip: v === 'ignore' } : c)); }}>
+                          <option value="ignore">Ignore</option>
+                          <option value="use">Import</option>
+                        </select>
+                      </td>
+                      <td>
+                        <select disabled={cm.skip} value={cm.period || monthKeys[0]} onChange={e => setColMaps(prev => prev.map((c, idx) => idx === ci ? { ...c, period: e.target.value } : c))}>
+                          {monthKeys.map(p => <option key={p} value={p}>{monthLabel(p)}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select disabled={cm.skip} value={cm.field || 'budget'} onChange={e => setColMaps(prev => prev.map((c, idx) => idx === ci ? { ...c, field: e.target.value } : c))}>
+                          <option value="budget">Budget</option>
+                          <option value="actual">Actual</option>
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn" onClick={() => setStep(2)}>← Back</button>
+            <button className="btn primary" onClick={proceedToRowMapping}>Next: Map Line Items →</button>
+          </div>
+        </div>
+      )}
+
+      {step === 4 && (
+        <div>
+          <p style={{ fontSize: 13, color: 'var(--muted)' }}>Rows were auto-matched to your existing line items where possible. Review, adjust the section/target for any row, or uncheck rows you don't want to import. Unmatched rows become new line items.</p>
+          <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
+            <table>
+              <thead><tr><th></th><th>Row Label</th><th>Section</th><th>Maps to</th></tr></thead>
+              <tbody>
+                {rowMaps.map((rm, ri) => rm.label ? (
+                  <tr key={ri}>
+                    <td><input type="checkbox" checked={rm.enabled} onChange={e => setRowMaps(prev => prev.map((r, idx) => idx === ri ? { ...r, enabled: e.target.checked } : r))} /></td>
+                    <td>{rm.label}</td>
+                    <td>
+                      <select disabled={!rm.enabled} value={rm.sectionKey} onChange={e => setRowMaps(prev => prev.map((r, idx) => idx === ri ? { ...r, sectionKey: e.target.value, itemKey: 'new' } : r))}>
+                        {Object.keys(SECTION_META).map(sec => <option key={sec} value={sec}>{SECTION_META[sec].title}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <select disabled={!rm.enabled} value={rm.itemKey} onChange={e => setRowMaps(prev => prev.map((r, idx) => idx === ri ? { ...r, itemKey: e.target.value } : r))}>
+                        <option value="new">+ New item: "{rm.label}"</option>
+                        {lineItems[rm.sectionKey].map(it => <option key={it.key} value={it.key}>{it.label}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                ) : null)}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn" onClick={() => setStep(3)}>← Back</button>
+            <button className="btn primary" onClick={runImport}>Import Data</button>
+          </div>
+        </div>
+      )}
+
+      {step === 5 && (
+        <div>
+          <p style={{ fontSize: 14 }}>✅ Import complete. Check P&amp;L Entry and P&amp;L Compare to review the imported numbers.</p>
+          <button className="btn primary" onClick={resetImport}>Import Another File</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Full printable report ---------------- */
+
+function FullReport({ companyName, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+  const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+  const yearData = rangeMonths.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
+  const occRows = vehicles.map(v => {
+    const pcts = rangeMonths.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
+    const valid = pcts.filter(x => x !== null);
+    const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
+    return { vehicle: v, pcts, avg };
+  });
+
+  return (
+    <div style={{ padding: 24 }}>
+      <h1 style={{ fontSize: 22 }}>{companyName}</h1>
+      <p style={{ color: 'var(--muted)', marginTop: 4 }}>Budget vs Actual &amp; Occupancy Report · {rangeMonths.map(monthLabel).join(' – ')}</p>
+
+      <div className="kpi-row">
+        <KpiCard label="Total Income" value={fmt(totals.income_actual, currency)} sub={`Budget ${fmt(totals.income_budget, currency)}`} diff={totals.income_actual - totals.income_budget} />
+        <KpiCard label="Gross Profit" value={fmt(totals.gross_actual, currency)} sub={`Budget ${fmt(totals.gross_budget, currency)}`} diff={totals.gross_actual - totals.gross_budget} />
+        <KpiCard label="EBITDA" value={fmt(totals.ebitda_actual, currency)} sub={`Budget ${fmt(totals.ebitda_budget, currency)}`} diff={totals.ebitda_actual - totals.ebitda_budget} />
+        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} />
+      </div>
+
+      <div className="panel">
+        <h3>Income &amp; Net Profit Trend</h3>
+        <LineTrendSVG data={yearData} series={[
+          { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+          { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
+          { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+          { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
+        ]} />
+      </div>
+
+      <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
+
+      <div className="panel">
+        <h3>Occupancy Summary</h3>
+        <table>
+          <thead><tr><th>Car</th><th>Plate</th><th className="num">Avg Occupancy</th><th>Remarks</th></tr></thead>
+          <tbody>
+            {occRows.map(r => (
+              <tr key={r.vehicle.id}>
+                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                <td className="num">{r.avg === null ? '—' : (r.avg * 100).toFixed(0) + '%'}</td>
+                <td>{r.avg === null ? '—' : (r.avg >= 0.5 ? 'OK' : 'Workout')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
