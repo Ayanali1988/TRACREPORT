@@ -148,6 +148,19 @@ const COLORS = ['#2D6E8E', '#3E9C6E', '#D98E3F', '#8C6BB1', '#C1503F', '#4E5D78'
 function uid(p) { return p + '_' + Math.random().toString(36).slice(2, 9); }
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 function monthsOf(year) { return Array.from({ length: 12 }, (_, i) => year + '-' + String(i + 1).padStart(2, '0')); }
+function periodsBetween(from, to) {
+  if (!from || !to || from > to) return [];
+  const result = [];
+  let [y, m] = from.split('-').map(Number);
+  const [ey, em] = to.split('-').map(Number);
+  let guard = 0;
+  while ((y < ey || (y === ey && m <= em)) && guard < 600) {
+    result.push(y + '-' + String(m).padStart(2, '0'));
+    m++; if (m > 12) { m = 1; y++; }
+    guard++;
+  }
+  return result;
+}
 function monthLabel(period) {
   const [y, m] = period.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleString('default', { month: 'short' }) + '-' + String(y).slice(2);
@@ -341,7 +354,43 @@ function App() {
   }, [companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo, loaded, authed]);
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
-  const rangeMonths = useMemo(() => monthKeys.filter(p => p >= reportFrom && p <= reportTo), [monthKeys, reportFrom, reportTo]);
+  const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
+
+  function downloadBackup() {
+    const state = { companyName, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, reportFrom, reportTo, backupDate: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${companyName.replace(/[^a-z0-9]+/gi, '-')}-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function restoreBackup(file) {
+    if (!window.confirm('Restoring will REPLACE all current data (vehicles, P&L entries, occupancy) with the contents of this backup file. This cannot be undone. Continue?')) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = JSON.parse(evt.target.result);
+        if (data.companyName) setCompanyName(data.companyName);
+        if (data.year) setYear(data.year);
+        if (data.currency) setCurrency(data.currency);
+        if (data.baseDays) setBaseDays(data.baseDays);
+        if (data.deletePin !== undefined) setDeletePin(data.deletePin);
+        if (data.lineItems) setLineItems(data.lineItems);
+        if (data.monthlyData) setMonthlyData(data.monthlyData);
+        if (data.vehicles) setVehicles(data.vehicles);
+        if (data.occupancy) setOccupancy(data.occupancy);
+        if (data.reportFrom) setReportFrom(data.reportFrom);
+        if (data.reportTo) setReportTo(data.reportTo);
+        window.alert('Backup restored successfully.');
+      } catch (e) {
+        window.alert('Could not read this file — make sure it is a backup .json file downloaded from this app.');
+      }
+    };
+    reader.readAsText(file);
+  }
 
   function handlePrint() {
     setActiveTab('full-report');
@@ -464,7 +513,7 @@ function App() {
           {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
           {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
-          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
         </div>
       </div>
@@ -543,10 +592,8 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
     <div>
       <div className="panel">
         <div className="field" style={{ maxWidth: 220 }}>
-          <label>Month</label>
-          <select value={period} onChange={e => setPeriod(e.target.value)}>
-            {monthKeys.map(p => <option key={p} value={p}>{monthLabel(p)}</option>)}
-          </select>
+          <label>Month (any year)</label>
+          <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
         </div>
       </div>
       {renderSection('revenue')}
@@ -669,7 +716,7 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
   return (
     <div className="panel">
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 12 }}>
-        <div className="field" style={{ maxWidth: 200 }}><label>Month</label><select value={period} onChange={e => setPeriod(e.target.value)}>{monthKeys.map(p => <option key={p} value={p}>{monthLabel(p)}</option>)}</select></div>
+        <div className="field" style={{ maxWidth: 200 }}><label>Month (any year)</label><input type="month" value={period} onChange={e => setPeriod(e.target.value)} /></div>
         <div className="field" style={{ maxWidth: 260 }}><label>Search</label><input placeholder="Filter vehicles…" value={search} onChange={e => setSearch(e.target.value)} /></div>
         <button className="btn small" onClick={() => fillAll(baseDays)}>Mark all fully worked ({baseDays}d)</button>
         <button className="btn small" onClick={() => fillAll(0)}>Mark all as 0 days</button>
@@ -801,13 +848,13 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin }) {
 
 /* ---------------- Settings ---------------- */
 
-function SettingsPanel({ companyName, setCompanyName, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin }) {
+function SettingsPanel({ companyName, setCompanyName, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup }) {
   const [pinInput, setPinInput] = useState(deletePin);
   return (
-    <div className="panel" style={{ maxWidth: 480 }}>
+    <div className="panel" style={{ maxWidth: 520 }}>
       <h3>Report Settings</h3>
       <div className="field" style={{ marginBottom: 12 }}><label>Company Name (shown on all reports)</label><input value={companyName} onChange={e => setCompanyName(e.target.value)} /></div>
-      <div className="field" style={{ marginBottom: 12 }}><label>Year</label><input value={year} onChange={e => setYear(e.target.value.replace(/\D/g, '').slice(0, 4) || '2026')} /></div>
+      <div className="field" style={{ marginBottom: 12 }}><label>Default Year (used to prefill month pickers — you can still enter data for any year)</label><input value={year} onChange={e => setYear(e.target.value.replace(/\D/g, '').slice(0, 4) || '2026')} /></div>
       <div className="field" style={{ marginBottom: 12 }}><label>Currency</label><input value={currency} onChange={e => setCurrency(e.target.value.toUpperCase().slice(0, 5))} /></div>
       <div className="field" style={{ marginBottom: 12 }}><label>Base Working Days / Month (for occupancy %)</label><input type="number" value={baseDays} onChange={e => setBaseDays(Math.max(1, num(e.target.value) || 22))} /></div>
       <div className="field" style={{ marginBottom: 6 }}>
@@ -816,6 +863,17 @@ function SettingsPanel({ companyName, setCompanyName, year, setYear, currency, s
       </div>
       <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>When set, deleting a vehicle or line item asks for this PIN in addition to a confirmation — helps prevent accidental data loss.</p>
       <button className="btn primary" onClick={() => setDeletePin(pinInput)}>Save PIN</button>
+
+      <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+
+      <h3>Backup &amp; Restore</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Your data lives in Netlify's storage, but it's smart to keep your own copy too. Download a complete backup file — every vehicle, every month of P&amp;L and occupancy data, and your settings — any time. Keep it somewhere safe (email to yourself, Google Drive, etc.).</p>
+      <button className="btn primary" onClick={onDownloadBackup} style={{ marginBottom: 14 }}>⬇ Download Full Backup (.json)</button>
+      <div>
+        <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 6 }}>Restore from a backup file — this replaces everything currently in the app</label>
+        <input type="file" accept=".json" onChange={e => { if (e.target.files[0]) onRestoreBackup(e.target.files[0]); e.target.value = ''; }} />
+      </div>
+
       <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h3>Site Password</h3>
       <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>The password to open this app is set via the <code>APP_PASSWORD</code> environment variable in your Netlify site's dashboard (Site settings → Environment variables). Update it there and redeploy to change it.</p>
