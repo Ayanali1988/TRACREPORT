@@ -1681,19 +1681,40 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
   }
 
   function applyBulk() {
-    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    const parseAmt = (v) => {
+      if (v === undefined || v === null) return 0;
+      let s = String(v).trim();
+      if (!s || s === '-' || s === '—') return 0;
+      let neg = false;
+      if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+      s = s.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+      if (!s) return 0;
+      const n = parseFloat(s);
+      if (isNaN(n)) return 0;
+      return neg ? -Math.abs(n) : n;
+    };
+    const lines = bulkText.split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.trim() !== '');
     const rows = lines.map(line => {
-      const parts = line.split(/\t|,/).map(p => p.trim()).filter(p => p !== '');
-      let number, dateStr, principal, interest;
-      if (parts.length >= 6) {
+      // Prefer splitting on tabs (how Excel/Sheets pastes columns) so commas inside
+      // numbers like "4,923.88" are never mistaken for a column separator.
+      const parts = (line.includes('\t') ? line.split('\t') : line.split(',')).map(p => p.trim());
+      let number, dateStr, principal, interest, paid = false;
+      if (parts.length >= 9) {
+        // Inst No, Due Date, Principal Amount, Profit Amount, Total EMI, Payable, Paid, Balance, Status
+        number = parts[0]; dateStr = parts[1]; principal = parseAmt(parts[2]); interest = parseAmt(parts[3]);
+        const paidAmt = parseAmt(parts[6]);
+        const statusText = String(parts[8] || '').trim().toLowerCase();
+        paid = statusText === 'paid' || paidAmt > 0;
+      } else if (parts.length >= 6) {
         // Bank format: Inst.No, Date, EMI, Principal Balance, Principal Component, Profit/Interest Component, [Rate]
-        number = parts[0]; dateStr = parts[1]; principal = parts[4]; interest = parts[5];
+        number = parts[0]; dateStr = parts[1]; principal = parseAmt(parts[4]); interest = parseAmt(parts[5]);
       } else {
         // Simple format: Number, Date, Principal, Interest
-        number = parts[0]; dateStr = parts[1]; principal = parts[2]; interest = parts[3];
+        number = parts[0]; dateStr = parts[1]; principal = parseAmt(parts[2]); interest = parseAmt(parts[3]);
       }
-      return { id: uid('inst'), number: num(number), dueDate: parseFlexibleDate(dateStr), principal: num(principal), interest: num(interest), paid: false, paidDate: '' };
-    }).sort((a, b) => a.number - b.number);
+      const dueDate = parseFlexibleDate(dateStr);
+      return { id: uid('inst'), number: num(number), dueDate, principal, interest, paid, paidDate: paid ? (dueDate + '-01') : '' };
+    }).filter(r => r.number).sort((a, b) => a.number - b.number);
     onChange({ schedule: rows });
     setBulkText('');
   }
@@ -1825,7 +1846,12 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
 
       <div className="panel">
         <h3>Import / Paste Your Own Schedule</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>If your bank gave you the exact schedule, paste it here — one installment per line: <code>Number, Due Date (YYYY-MM), Principal, Interest</code>. This replaces the schedule above entirely.</p>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Copy the rows straight out of your bank's spreadsheet (including a "Status"/"Paid" column if it has one) and paste them below — no need to reformat dates or retype anything. This replaces the schedule above entirely. Supported layouts, auto-detected:</p>
+        <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4, paddingLeft: 18 }}>
+          <li><code>Inst No, Due Date, Principal, Profit, Total EMI, Payable, Paid, Balance, Status</code> — paid status is read from the Status/Paid columns automatically</li>
+          <li><code>Inst No, Date, EMI, Principal Balance, Principal, Profit, Rate</code></li>
+          <li><code>Number, Date, Principal, Interest</code></li>
+        </ul>
         <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={4}
           style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
           placeholder={"1, 2026-08, 5200.00, 1030.05\n2, 2026-09, 5240.85, 989.21"} />
