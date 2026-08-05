@@ -762,6 +762,7 @@ function App() {
       return [...prev, id];
     });
   }
+  function selectOnlyLoan(id) { setSelectedLoanIds([id]); }
 
   function resetLineItemsToDefault() {
     if (!confirmDelete('all custom line items (revert to the default chart of accounts)', deletePin)) return;
@@ -1057,7 +1058,7 @@ function App() {
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
-          {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} />}
+          {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} onSelectOnlyLoan={selectOnlyLoan} />}
           {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
@@ -2008,7 +2009,7 @@ function FeasibilityDetail({ study, onChange, currency }) {
 
 /* ---------------- Vehicle Financing ---------------- */
 
-function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan, selectedLoanIds, onToggleLoanSelect, onSelectAllLoans }) {
+function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan, selectedLoanIds, onToggleLoanSelect, onSelectAllLoans, onSelectOnlyLoan }) {
   const [selectedId, setSelectedId] = useState(loans[0] ? loans[0].id : null);
 
   // When the Report Selection chips narrow down to exactly one car, show that same car's
@@ -2024,6 +2025,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
     const l = emptyLoan();
     setLoans([...loans, l]);
     setSelectedId(l.id);
+    onSelectOnlyLoan(l.id);
   }
   function deleteLoan(loan) {
     if (!confirmDelete(loan.modelName || 'this loan', deletePin)) return;
@@ -2048,6 +2050,19 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
     return acc;
   }, { principalBalance: 0, interestBalance: 0, monthlyEMI: 0, overdueCount: 0, totalFinanced: 0, totalPaid: 0 });
   const fleetPaidPct = fleetTotals.totalFinanced ? fleetTotals.totalPaid / fleetTotals.totalFinanced : 0;
+
+  const isSingleCarView = selectedLoanIds.length === 1;
+  const aggStats = displayLoans.reduce((acc, l) => {
+    const s = loanStats(l);
+    acc.totalPrincipal += s.totalPrincipal;
+    acc.totalInterest += s.totalInterest;
+    acc.paidPrincipal += s.paidPrincipal;
+    acc.paidInterest += s.paidInterest;
+    acc.totalAmount += s.totalAmount;
+    acc.paidAmount += s.paidAmount;
+    return acc;
+  }, { totalPrincipal: 0, totalInterest: 0, paidPrincipal: 0, paidInterest: 0, totalAmount: 0, paidAmount: 0 });
+  const aggPaidPct = aggStats.totalAmount ? aggStats.paidAmount / aggStats.totalAmount : 0;
 
   return (
     <div>
@@ -2091,7 +2106,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
               {displayLoans.map(l => {
                 const s = loanStats(l);
                 return (
-                  <tr key={l.id} style={{ background: l.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(l.id)}>
+                  <tr key={l.id} style={{ background: l.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => { setSelectedId(l.id); onSelectOnlyLoan(l.id); }}>
                     <td>{l.modelName || '(unnamed)'}</td>
                     <td>{l.lender || '—'}</td>
                     <td className="num">{fmt(loanAmount(l), currency)}</td>
@@ -2108,7 +2123,32 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
         )}
       </div>
 
-      {selected && <FinancingDetail loan={selected} vehicles={vehicles} onChange={patch => updateLoan(selected.id, patch)} currency={currency} onPrint={() => onPrintLoan(selected.id)} deletePin={deletePin} />}
+      {isSingleCarView && selected ? (
+        <FinancingDetail loan={selected} vehicles={vehicles} onChange={patch => updateLoan(selected.id, patch)} currency={currency} onPrint={() => onPrintLoan(selected.id)} deletePin={deletePin} />
+      ) : displayLoans.length > 0 ? (
+        <>
+          <div className="panel">
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
+              {displayLoans.length} cars selected — showing combined figures below. Individual loan details, schedules, and the defer/paid tools are only shown when exactly one car is selected in Report Selection above, to avoid mixing up separate loans.
+            </p>
+          </div>
+          <div className="grid-2">
+            <div className="panel" style={{ textAlign: 'center' }}>
+              <h3>Combined Payment Progress</h3>
+              <DonutGauge pct={aggPaidPct} color={aggPaidPct >= 1 ? '#3E9C6E' : '#2D6E8E'} />
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>across {displayLoans.length} selected car{displayLoans.length > 1 ? 's' : ''}</p>
+            </div>
+            <div className="panel">
+              <h3>Combined Total vs Paid</h3>
+              <GroupedBarChart data={[
+                { label: 'Principal', total: aggStats.totalPrincipal, paid: aggStats.paidPrincipal },
+                { label: 'Interest', total: aggStats.totalInterest, paid: aggStats.paidInterest },
+                { label: 'Total', total: aggStats.totalAmount, paid: aggStats.paidAmount },
+              ]} series={[{ key: 'total', label: 'Total', color: '#D9C8B9' }, { key: 'paid', label: 'Paid', color: '#2D6E8E' }]} height={160} />
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
