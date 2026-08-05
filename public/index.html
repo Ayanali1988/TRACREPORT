@@ -114,7 +114,7 @@ const defaultLineItems = () => ({
     { key: 'trackingCharges', label: 'Tracking charges' },
     { key: 'insuranceCharges', label: 'Insurance charges' },
     { key: 'vehicleMaintenance', label: 'Vehicle maintenance' },
-    { key: 'otherIncomeCost', label: 'Other income - cost' },
+    { key: 'depreciationVehicles', label: 'Depreciation - vehicles' },
   ],
   indirect: [
     { key: 'rentOffice', label: 'Rent - Office' },
@@ -170,7 +170,11 @@ function monthLabel(period) {
   const [y, m] = period.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleString('default', { month: 'short' }) + '-' + String(y).slice(2);
 }
-function fmt(n, currency) { return currency + ' ' + Math.round(num(n)).toLocaleString('en-US'); }
+function fmt(n, currency) {
+  const rounded = Math.round(num(n));
+  if (rounded === 0) return '-';
+  return currency + ' ' + rounded.toLocaleString('en-US');
+}
 function pctStr(n) { return isFinite(n) ? (n * 100).toFixed(1) + '%' : '—'; }
 
 function computeMonth(period, monthlyData, lineItems) {
@@ -233,11 +237,13 @@ function buildPnlDetailRows(rangeMonths, lineItems, monthlyData) {
   pushSection('revenue', 'Total Income', 'income');
   pushSection('direct', 'Total Direct Expenses', 'direct');
   detailRows.push(['Gross Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.gross_budget, c.gross_actual]; })]);
+  detailRows.push(['Gross Profit %', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [pctStr(c.grossPct_budget), pctStr(c.grossPct_actual)]; })]);
   pushSection('indirect', 'Total Indirect Expenses', 'indirect');
   detailRows.push(['EBITDA', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.ebitda_budget, c.ebitda_actual]; })]);
   pushSection('interest', 'Total Interest & Bank Charges', 'interest');
   pushSection('belowLine', null, null);
   detailRows.push(['Net Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.netprofit_budget, c.netprofit_actual]; })]);
+  detailRows.push(['Net Profit %', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [pctStr(c.netPct_budget), pctStr(c.netPct_actual)]; })]);
   return detailRows;
 }
 
@@ -720,6 +726,28 @@ function App() {
     if (!confirmDelete('all custom line items (revert to the default chart of accounts)', deletePin)) return;
     setLineItems(defaultLineItems());
   }
+  function reorderLineItemsToDefault() {
+    // Puts every item that matches a default account name back into the same sequence as
+    // your Budget sheet, without deleting anything — custom items you've added get moved
+    // to the end of their section instead of being removed. All entered data is untouched
+    // since monthlyData is keyed by item id, not by position.
+    const defaults = defaultLineItems();
+    setLineItems(prev => {
+      const next = {};
+      Object.keys(prev).forEach(sec => {
+        const defaultLabels = (defaults[sec] || []).map(d => d.label.toLowerCase().trim());
+        const matched = [];
+        const custom = [];
+        prev[sec].forEach(item => {
+          const idx = defaultLabels.indexOf(String(item.label).toLowerCase().trim());
+          if (idx > -1) matched.push({ item, idx }); else custom.push(item);
+        });
+        matched.sort((a, b) => a.idx - b.idx);
+        next[sec] = [...matched.map(m => m.item), ...custom];
+      });
+      return next;
+    });
+  }
   function clearAllPnlData() {
     if (!confirmDelete('ALL P&L budget/actual entries, every month and year', deletePin)) return;
     setMonthlyData({});
@@ -980,7 +1008,7 @@ function App() {
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
           {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
-          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
         </div>
       </div>
@@ -1187,22 +1215,38 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
 
   const c = computeMonth(period, monthlyData, lineItems);
 
+  const sectionSubtotal = {
+    revenue: { key: 'income', label: 'Total Income' },
+    direct: { key: 'direct', label: 'Total Direct Expenses' },
+    indirect: { key: 'indirect', label: 'Total Indirect Expenses' },
+    interest: { key: 'interest', label: 'Total Interest & Bank Charges' },
+  };
+
   const renderSection = (sectionKey) => (
     <div className="panel" key={sectionKey}>
+      <h3 style={{ textAlign: 'left' }}>{SECTION_META[sectionKey].title}</h3>
       <table>
-        <thead><tr><th>{SECTION_META[sectionKey].title}</th><th className="num">Budget ({currency})</th><th className="num">Actual ({currency})</th><th></th></tr></thead>
+        <thead><tr><th style={{ textAlign: 'left' }}>Line Item</th><th className="num">Budget ({currency})</th><th className="num">Actual ({currency})</th><th></th></tr></thead>
         <tbody>
           {lineItems[sectionKey].map(item => {
             const cellVal = (monthlyData[period] || {})[item.key] || {};
             return (
               <tr key={item.key}>
-                <td><input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)} style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit' }} /></td>
+                <td style={{ textAlign: 'left' }}><input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)} style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit', textAlign: 'left' }} /></td>
                 <td className="num"><input type="number" value={cellVal.budget || ''} onChange={e => setCell(item.key, 'budget', e.target.value)} /></td>
                 <td className="num"><input type="number" value={cellVal.actual || ''} onChange={e => setCell(item.key, 'actual', e.target.value)} /></td>
                 <td><button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)}>✕</button></td>
               </tr>
             );
           })}
+          {sectionSubtotal[sectionKey] && (
+            <tr className="subtotal-row">
+              <td>{sectionSubtotal[sectionKey].label}</td>
+              <td className="num">{fmt(c[sectionSubtotal[sectionKey].key + '_budget'], currency)}</td>
+              <td className="num">{fmt(c[sectionSubtotal[sectionKey].key + '_actual'], currency)}</td>
+              <td></td>
+            </tr>
+          )}
         </tbody>
       </table>
       <div className="add-row">
@@ -1263,8 +1307,13 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
       </div>
 
       {renderSection('revenue')}
-      {renderSection('direct')}
-      {renderSection('indirect')}
+
+      <div style={{ border: '1px solid var(--steel)', borderRadius: 10, padding: '14px 16px 4px 16px', marginBottom: 16, background: 'rgba(45,110,142,0.03)' }}>
+        <h3 style={{ textAlign: 'left', color: 'var(--steel)', marginBottom: 12 }}>Expenses</h3>
+        {renderSection('direct')}
+        {renderSection('indirect')}
+      </div>
+
       {renderSection('interest')}
       {renderSection('belowLine')}
       <div className="kpi-row">
@@ -1288,11 +1337,16 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
       rows.push({ type: 'section', label: SECTION_META[sec].title });
       lineItems[sec].forEach(item => rows.push({ type: 'item', key: item.key, label: item.label, kind: SECTION_META[sec].kind }));
       if (sec === 'revenue') rows.push({ type: 'subtotal', key: 'income', label: 'Total Income', kind: 'income' });
-      if (sec === 'direct') { rows.push({ type: 'subtotal', key: 'direct', label: 'Total Direct Expenses', kind: 'expense' }); rows.push({ type: 'subtotal', key: 'gross', label: 'Gross Profit', kind: 'income' }); }
+      if (sec === 'direct') {
+        rows.push({ type: 'subtotal', key: 'direct', label: 'Total Direct Expenses', kind: 'expense' });
+        rows.push({ type: 'subtotal', key: 'gross', label: 'Gross Profit', kind: 'income' });
+        rows.push({ type: 'ratio', key: 'grossPct', label: 'Gross Profit %' });
+      }
       if (sec === 'indirect') { rows.push({ type: 'subtotal', key: 'indirect', label: 'Total Indirect Expenses', kind: 'expense' }); rows.push({ type: 'subtotal', key: 'ebitda', label: 'EBITDA', kind: 'income' }); }
       if (sec === 'interest') rows.push({ type: 'subtotal', key: 'interest', label: 'Total Interest & Bank Charges', kind: 'expense' });
     });
     rows.push({ type: 'net', key: 'netprofit', label: 'Net Profit', kind: 'income' });
+    rows.push({ type: 'ratio', key: 'netPct', label: 'Net Profit %' });
     return rows;
   }, [lineItems]);
 
@@ -1340,7 +1394,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
           <tbody>
             {allRows.map((row, idx) => {
               if (row.type === 'section') return <tr key={idx} className="section-row"><td colSpan={1 + monthKeys.length * 3}>{row.label}</td></tr>;
-              const rowClass = row.type === 'net' ? 'net-row' : row.type === 'subtotal' ? 'subtotal-row' : '';
+              const rowClass = row.type === 'net' ? 'net-row' : row.type === 'subtotal' ? 'subtotal-row' : row.type === 'ratio' ? 'subtotal-row' : '';
               return (
                 <tr key={idx} className={rowClass}>
                   <td>{row.label}</td>
@@ -1348,6 +1402,16 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
                     let budget, actual;
                     if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget = num(md.budget); actual = num(md.actual); }
                     else { const c = computeMonth(p, monthlyData, lineItems); budget = c[row.key + '_budget']; actual = c[row.key + '_actual']; }
+                    if (row.type === 'ratio') {
+                      const ptDiff = actual - budget;
+                      return (
+                        <Fragment key={p}>
+                          <td className="num">{pctStr(budget)}</td>
+                          <td className="num">{pctStr(actual)}</td>
+                          <td className="num"><span className={`badge ${ptDiff >= 0 ? 'pos' : 'neg'}`}>{(ptDiff >= 0 ? '+' : '') + (ptDiff * 100).toFixed(1) + 'pt'}</span></td>
+                        </Fragment>
+                      );
+                    }
                     const v = rowVariance(budget, actual, row.kind);
                     return (
                       <Fragment key={p}>
@@ -2234,7 +2298,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
 
 /* ---------------- Settings ---------------- */
 
-function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup, onResetLineItems, onClearPnl, onClearOccupancy }) {
+function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup, onResetLineItems, onReorderLineItems, onClearPnl, onClearOccupancy }) {
   const [pinInput, setPinInput] = useState(deletePin);
   const [logoError, setLogoError] = useState('');
 
@@ -2283,6 +2347,11 @@ function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUr
         <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 6 }}>Restore from a backup file — this replaces everything currently in the app</label>
         <input type="file" accept=".json" onChange={e => { if (e.target.files[0]) onRestoreBackup(e.target.files[0]); e.target.value = ''; }} />
       </div>
+
+      <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+      <h3>Chart of Accounts Sequence</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>If line items ended up out of order (e.g. from an earlier import), this puts every recognized account back into the same sequence as your Budget sheet — Revenue, then Direct, then Indirect, then Interest — without deleting anything. Any custom items you've added move to the end of their section; every number you've entered stays exactly as it is.</p>
+      <button className="btn primary" onClick={onReorderLineItems} style={{ marginBottom: 4 }}>Reorder Line Items to Match Budget Sheet Sequence</button>
 
       <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h3>Site Password</h3>
@@ -2365,19 +2434,49 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
 
   function proceedToColumnMapping() {
     const headerCells = rawRows[headerRow] || [];
-    setColMaps(headerCells.map(() => ({ skip: true, period: monthKeys[0], field: 'budget' })));
+    const monthNameToNum = { jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12 };
+    const maps = headerCells.map((cell, idx) => {
+      if (idx === labelCol) return { skip: true };
+      const text = String(cell || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+      const monthNum = monthNameToNum[text];
+      if (monthNum) {
+        // Auto-recognized a month header (e.g. "JAN", "February") — map it straight to that
+        // month of the currently selected year, defaulting to Budget since full-year grids
+        // in these sheets are almost always the budget column.
+        return { skip: false, period: monthKeys[monthNum - 1] || monthKeys[0], field: 'budget' };
+      }
+      const isBudget = /budget/.test(text);
+      const isActual = /actual/.test(text);
+      if (isBudget || isActual) {
+        return { skip: false, period: monthKeys[0], field: isActual ? 'actual' : 'budget' };
+      }
+      return { skip: true, period: monthKeys[0], field: 'budget' };
+    });
+    setColMaps(maps);
     setStep(3);
   }
 
   function proceedToRowMapping() {
     const dataRows = rawRows.slice(headerRow + 1);
+    // Rows that look like subtotals, section headers, ratio/percentage summary lines, or
+    // report title/footer text — these aren't real accounts, so they default OFF and the
+    // user has to deliberately switch them on if they really want to import one as a line item.
+    const skipPatterns = /^(total|gross profit|net profit|ebitda|ebitad|ratio$|particulars$|revenue$|direct expenses$|indirect expenses$|interest\s*&|profit on sale|amounts in|projected budget|page\s*\d|^\s*llc|dubai|budget statement)/i;
     const maps = dataRows.map(row => {
       const label = row[labelCol];
       if (!label || String(label).trim() === '') return { enabled: false, label: '' };
-      const norm = normLabel(label);
+      const labelStr = String(label).trim();
+      const norm = normLabel(labelStr);
       const match = flatItems.find(fi => normLabel(fi.label) === norm) ||
         flatItems.find(fi => norm.length > 3 && (normLabel(fi.label).includes(norm) || norm.includes(normLabel(fi.label))));
-      return { enabled: true, label: String(label), sectionKey: match ? match.sectionKey : 'direct', itemKey: match ? match.key : 'new' };
+      const looksLikeNonAccount = !match && (skipPatterns.test(labelStr) || /%\s*$/.test(labelStr) || (labelStr === labelStr.toUpperCase() && labelStr.replace(/[^A-Z]/g, '').length > 4));
+      return {
+        enabled: !looksLikeNonAccount,
+        label: labelStr,
+        sectionKey: match ? match.sectionKey : 'direct',
+        itemKey: match ? match.key : 'new',
+        autoSkipped: looksLikeNonAccount,
+      };
     });
     setRowMaps(maps);
     setStep(4);
@@ -2515,13 +2614,13 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
 
       {step === 4 && (
         <div>
-          <p style={{ fontSize: 13, color: 'var(--muted)' }}>Rows were auto-matched to your existing line items where possible. Review, adjust the section/target for any row, or uncheck rows you don't want to import. Unmatched rows become new line items.</p>
+          <p style={{ fontSize: 13, color: 'var(--muted)' }}>Rows were auto-matched to your existing line items where possible. Rows that look like subtotals, section headers, ratio/percentage lines, or report title text (e.g. "Total Income", "Gross Profit %", company name/footer lines) are automatically left unchecked — the app calculates those itself and they shouldn't be imported as accounts. Review, adjust, or re-enable anything the guess got wrong.</p>
           <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
             <table>
-              <thead><tr><th></th><th>Row Label</th><th>Section</th><th>Maps to</th></tr></thead>
+              <thead><tr><th></th><th>Row Label</th><th>Section</th><th>Maps to</th><th></th></tr></thead>
               <tbody>
                 {rowMaps.map((rm, ri) => rm.label ? (
-                  <tr key={ri}>
+                  <tr key={ri} style={{ background: rm.autoSkipped ? '#FBF4E8' : undefined }}>
                     <td><input type="checkbox" checked={rm.enabled} onChange={e => setRowMaps(prev => prev.map((r, idx) => idx === ri ? { ...r, enabled: e.target.checked } : r))} /></td>
                     <td>{rm.label}</td>
                     <td>
@@ -2535,6 +2634,7 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
                         {lineItems[rm.sectionKey].map(it => <option key={it.key} value={it.key}>{it.label}</option>)}
                       </select>
                     </td>
+                    <td style={{ fontSize: 11, color: 'var(--amber)' }}>{rm.autoSkipped ? 'auto-skipped: looks like a subtotal/header' : ''}</td>
                   </tr>
                 ) : null)}
               </tbody>
