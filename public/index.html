@@ -956,6 +956,7 @@ function App() {
           <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
           <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>
           <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>
+          <button className={`navbtn ${activeTab === 'chart-of-accounts' ? 'active' : ''}`} onClick={() => setActiveTab('chart-of-accounts')}>📑 Chart of Accounts</button>
           <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
           <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
         </nav>
@@ -1007,6 +1008,7 @@ function App() {
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
           {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} />}
+          {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
@@ -1150,6 +1152,79 @@ function KpiCard({ label, value, sub, diff }) {
 }
 
 /* ---------------- P&L Entry ---------------- */
+
+/* ---------------- Chart of Accounts ---------------- */
+
+function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
+  const [newItemText, setNewItemText] = useState({});
+
+  function addItem(sectionKey) {
+    const label = (newItemText[sectionKey] || '').trim();
+    if (!label) return;
+    setLineItems(prev => ({ ...prev, [sectionKey]: [...prev[sectionKey], { key: uid('item'), label }] }));
+    setNewItemText({ ...newItemText, [sectionKey]: '' });
+  }
+  function removeItem(sectionKey, key, label) {
+    if (!confirmDelete(label, deletePin)) return;
+    setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].filter(i => i.key !== key) }));
+  }
+  function renameItem(sectionKey, key, newLabel) {
+    setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].map(it => it.key === key ? { ...it, label: newLabel } : it) }));
+  }
+  function moveItem(sectionKey, index, delta) {
+    setLineItems(prev => {
+      const arr = [...prev[sectionKey]];
+      const newIndex = index + delta;
+      if (newIndex < 0 || newIndex >= arr.length) return prev;
+      [arr[index], arr[newIndex]] = [arr[newIndex], arr[index]];
+      return { ...prev, [sectionKey]: arr };
+    });
+  }
+
+  const totalItems = Object.values(lineItems).reduce((s, arr) => s + arr.length, 0);
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Chart of Accounts</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
+          The full list of accounts used across every P&amp;L report — {totalItems} items across 5 sections. Add, rename, reorder, or remove accounts here without monthly figures cluttering the view. Changes apply everywhere: P&amp;L Entry, Compare, and exports.
+        </p>
+      </div>
+
+      {['revenue', 'direct', 'indirect', 'interest', 'belowLine'].map(sectionKey => (
+        <div className="panel" key={sectionKey}>
+          <h3 style={{ textAlign: 'left' }}>{SECTION_META[sectionKey].title} <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>({lineItems[sectionKey].length} accounts)</span></h3>
+          <table>
+            <thead><tr><th style={{ textAlign: 'left' }}>Account Name</th><th></th></tr></thead>
+            <tbody>
+              {lineItems[sectionKey].map((item, idx) => (
+                <tr key={item.key}>
+                  <td style={{ textAlign: 'left' }}>
+                    <input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)}
+                      style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit', textAlign: 'left' }} />
+                  </td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="icon-btn" disabled={idx === 0} onClick={() => moveItem(sectionKey, idx, -1)} title="Move up">↑</button>{' '}
+                    <button className="icon-btn" disabled={idx === lineItems[sectionKey].length - 1} onClick={() => moveItem(sectionKey, idx, 1)} title="Move down">↓</button>{' '}
+                    <button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)} title="Delete">✕</button>
+                  </td>
+                </tr>
+              ))}
+              {lineItems[sectionKey].length === 0 && <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No accounts in this section yet.</td></tr>}
+            </tbody>
+          </table>
+          <div className="add-row">
+            <input placeholder={`Add account to ${SECTION_META[sectionKey].title}…`} value={newItemText[sectionKey] || ''}
+              onChange={e => setNewItemText({ ...newItemText, [sectionKey]: e.target.value })}
+              onKeyDown={e => { if (e.key === 'Enter') addItem(sectionKey); }} />
+            <button className="btn small" onClick={() => addItem(sectionKey)}>+ Add</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin }) {
   const [period, setPeriod] = useState(monthKeys[0]);
@@ -1486,6 +1561,27 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
   const validAvgs = rows.filter(r => r.avg !== null);
   const fleetAvg = validAvgs.length ? validAvgs.reduce((s, r) => s + r.avg, 0) / validAvgs.length : 0;
 
+  const categories = {};
+  rows.forEach(r => {
+    const cat = (r.vehicle.category && r.vehicle.category.trim()) ? r.vehicle.category.trim() : 'Uncategorized';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(r);
+  });
+  const categoryList = Object.keys(categories).map((name, i) => {
+    const catRows = categories[name];
+    const allValid = catRows.flatMap(r => r.monthPcts.filter(x => x !== null));
+    const avgOverall = allValid.length ? allValid.reduce((a, b) => a + b, 0) / allValid.length : null;
+    return { name, count: catRows.length, avgOverall, color: COLORS[i % COLORS.length] };
+  }).sort((a, b) => (b.avgOverall ?? -1) - (a.avgOverall ?? -1));
+  const categoryTrendData = monthKeys.map((p, mi) => {
+    const point = { label: monthLabel(p) };
+    categoryList.forEach(cat => {
+      const vals = categories[cat.name].map(r => r.monthPcts[mi]).filter(x => x !== null);
+      point[cat.name] = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) * 100 : 0;
+    });
+    return point;
+  });
+
   if (vehicles.length === 0) return <div className="empty-state"><h2>No vehicles yet</h2><p>Add your fleet in the Vehicles tab, then log occupancy days.</p></div>;
 
   return (
@@ -1494,6 +1590,31 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
         <KpiCard label="Fleet Avg Occupancy" value={pctStr(fleetAvg)} sub={`base ${baseDays} days/month`} diff={fleetAvg - 0.5} />
         <div className="kpi-card"><div className="label">Vehicles Below 50%</div><div className="value mono" style={{ color: 'var(--red)' }}>{rows.filter(r => r.avg !== null && r.avg < 0.5).length}</div></div>
       </div>
+
+      <div className="panel">
+        <h3>Occupancy by Category — Trend</h3>
+        <LineTrendSVG data={categoryTrendData} series={categoryList.map(cat => ({ key: cat.name, label: cat.name, color: cat.color }))} />
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
+          {categoryList.map(cat => <span key={cat.name} style={{ marginRight: 12 }}>■ <span style={{ color: cat.color }}>{cat.name}</span></span>)}
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Category Summary</h3>
+        <table>
+          <thead><tr><th>Category</th><th className="num">Vehicles</th><th className="num">Avg Occupancy (period)</th></tr></thead>
+          <tbody>
+            {categoryList.map(cat => (
+              <tr key={cat.name}>
+                <td>{cat.name}</td>
+                <td className="num">{cat.count}</td>
+                <td className="num">{cat.avgOverall === null ? '—' : <span className={`badge ${cat.avgOverall >= 0.5 ? 'pos' : 'neg'}`}>{pctStr(cat.avgOverall)}</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       <div className="grid-2">
         <div className="panel"><h3>Occupancy by Vehicle</h3><HBarList data={barData} maxVal={100} /></div>
         <div className="panel">
@@ -1510,11 +1631,11 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Occupancy Matrix</h3>
         <table>
-          <thead><tr><th>Car</th><th>Plate</th>{monthKeys.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}<th className="num">Avg %</th><th>Remarks</th></tr></thead>
+          <thead><tr><th>Car</th><th>Plate</th><th>Category</th>{monthKeys.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}<th className="num">Avg %</th><th>Remarks</th></tr></thead>
           <tbody>
             {rows.map(r => (
               <tr key={r.vehicle.id}>
-                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td><td>{r.vehicle.category || '—'}</td>
                 {r.monthPcts.map((p, i) => <td key={i} className="num">{p === null ? '' : (p * 100).toFixed(0) + '%'}</td>)}
                 <td className="num">{r.avg === null ? '' : (r.avg * 100).toFixed(0) + '%'}</td>
                 <td>{r.avg === null ? '' : <span className={`badge ${r.avg >= 0.5 ? 'pos' : 'neg'}`}>{r.avg >= 0.5 ? 'OK' : 'Workout'}</span>}</td>
@@ -2224,10 +2345,11 @@ function LoanScheduleReport({ loan, companyName, currency }) {
 /* ---------------- Vehicles ---------------- */
 
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
-  const [form, setForm] = useState({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' });
+  const [form, setForm] = useState({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' });
   const [bulkText, setBulkText] = useState('');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState(null);
+  const CATEGORY_PRESETS = ['Economy Cars', 'Luxury Cars', 'Small Cars', 'Office Use Cars'];
 
   function addVehicle() {
     if (!form.name.trim()) return;
@@ -2237,13 +2359,13 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
     } else {
       setVehicles([...vehicles, { id: uid('veh'), ...form }]);
     }
-    setForm({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' });
+    setForm({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' });
   }
-  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
+  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', purchaseValue: parts[2] || '' }; });
+    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', category: parts[2] || '', purchaseValue: parts[3] || '' }; });
     setVehicles([...vehicles, ...nv]); setBulkText('');
   }
   const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
@@ -2255,18 +2377,23 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <div className="field" style={{ flex: '1 1 160px' }}><label>Model / Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Sunny" /></div>
           <div className="field" style={{ flex: '1 1 120px' }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}>
+            <label>Category</label>
+            <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
+            <datalist id="category-presets">{CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}</datalist>
+          </div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={form.purchaseValue} onChange={e => setForm({ ...form, purchaseValue: e.target.value })} placeholder="50000" /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses default" /></div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button className="btn primary" onClick={addVehicle}>{editId ? 'Update Vehicle' : '+ Add Vehicle'}</button>
-          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
+          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
         </div>
       </div>
       <div className="panel">
         <h3>Bulk Add</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate, Purchase Value (optional)</code></p>
-        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Sunny, 9182-G, 45000\nGMC Yukon, 9185-G, 120000"} />
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate, Category (optional), Purchase Value (optional)</code></p>
+        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Sunny, 9182-G, Economy Cars, 45000\nGMC Yukon, 9185-G, Luxury Cars, 120000"} />
         <button className="btn primary" style={{ marginTop: 10 }} onClick={bulkAdd}>+ Add All</button>
       </div>
       <div className="panel">
@@ -2275,11 +2402,11 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>Model / Name</th><th>Plate</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
+          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
             {filtered.map(v => (
               <tr key={v.id}>
-                <td>{v.name}</td><td>{v.plate}</td>
+                <td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
                 <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString('en-US') : '—'}</td>
                 <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : 'default'}</td>
                 <td style={{ textAlign: 'right' }}>
