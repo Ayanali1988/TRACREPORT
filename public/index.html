@@ -375,13 +375,15 @@ function vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) {
 /* ---------------- Feasibility Study calculations ---------------- */
 
 function calcEMI(principal, annualRatePct, termMonths) {
-  const r = (num(annualRatePct) / 100) / 12;
-  const n = num(termMonths);
+  // Flat-rate method: Balance (Car Value − Down Payment) + total interest for the whole
+  // financing period (annual rate × number of years financed), all divided evenly across
+  // the months — not a reducing-balance/amortized calculation.
   const p = num(principal);
-  if (!p || !n) return 0;
-  if (!r) return p / n;
-  const factor = Math.pow(1 + r, n);
-  return p * r * factor / (factor - 1);
+  const months = num(termMonths);
+  if (!p || !months) return 0;
+  const years = months / 12;
+  const totalInterest = p * (num(annualRatePct) / 100) * years;
+  return (p + totalInterest) / months;
 }
 
 /* ---------------- Vehicle Financing ---------------- */
@@ -435,21 +437,28 @@ function loanTermMonths(loan) { return loan.termUnit === 'years' ? num(loan.term
 function generateSchedule(loan) {
   const principal = loanAmount(loan);
   const months = loanTermMonths(loan);
+  if (!months) return [];
+  const years = months / 12;
   const rate = num(loan.interestRate);
-  const emi = calcEMI(principal, rate, months);
-  const r = (rate / 100) / 12;
-  let balance = principal;
+  const totalInterest = principal * (rate / 100) * years;
+  const monthlyPrincipal = principal / months;
+  const monthlyInterest = totalInterest / months;
   const rows = [];
+  let principalSum = 0, interestSum = 0;
   for (let i = 1; i <= months; i++) {
-    const interest = balance * r;
-    let principalPortion = emi - interest;
-    if (i === months || principalPortion > balance) principalPortion = balance;
-    balance = Math.max(0, balance - principalPortion);
+    let p = Math.round(monthlyPrincipal * 100) / 100;
+    let it = Math.round(monthlyInterest * 100) / 100;
+    if (i === months) {
+      // last installment absorbs any rounding drift so totals match exactly
+      p = Math.round((principal - principalSum) * 100) / 100;
+      it = Math.round((totalInterest - interestSum) * 100) / 100;
+    }
+    principalSum += p; interestSum += it;
     rows.push({
       id: uid('inst'), number: i,
       dueDate: addMonths(loan.startDate, i - 1),
-      principal: Math.round(principalPortion * 100) / 100,
-      interest: Math.round(interest * 100) / 100,
+      principal: p,
+      interest: it,
       paid: false, paidDate: '',
     });
   }
@@ -2056,6 +2065,8 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
   const [deferMonths, setDeferMonths] = useState(1);
   const [bulkText, setBulkText] = useState('');
   const [markPaidUpTo, setMarkPaidUpTo] = useState('');
+  const [showDetails, setShowDetails] = useState(loan.schedule.length === 0);
+  const [showImport, setShowImport] = useState(false);
 
   function regenerate() {
     if (loan.schedule.some(r => r.paid) && !window.confirm('This loan already has paid installments recorded. Regenerating will replace the ENTIRE schedule and lose that paid history. Continue?')) return;
@@ -2127,8 +2138,13 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
   return (
     <div>
       <div className="panel">
-        <h3>Loan Details</h3>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0 }}>Loan Details {!showDetails && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— {loan.modelName || '(unnamed)'}, {fmt(loanAmount(loan), currency)} at {loan.interestRate || 0}%</span>}</h3>
+          <button className="btn small" onClick={() => setShowDetails(!showDetails)}>{showDetails ? 'Hide' : 'Edit Loan Details'}</button>
+        </div>
+        {showDetails && (
+        <>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
           <div className="field" style={{ flex: '1 1 180px' }}><label>Vehicle / Model</label><input value={loan.modelName} onChange={e => onChange({ modelName: e.target.value })} placeholder="Nissan Patrol" /></div>
           <div className="field" style={{ flex: '1 1 160px' }}><label>Link to Fleet Vehicle (optional)</label>
             <select value={loan.vehicleId} onChange={e => onChange({ vehicleId: e.target.value })}>
@@ -2170,10 +2186,12 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
             <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated Total Payable (Loan + Interest)</div>
             <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loan.interestRate, loanTermMonths(loan)) * loanTermMonths(loan), currency)}</div>
           </div>
-          <div style={{ fontSize: 11.5, color: 'var(--muted)', alignSelf: 'flex-end' }}>= Loan Amount + total interest over the term, ÷ months. Generate the schedule below for exact figures.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', alignSelf: 'flex-end' }}>= (Loan Amount + Interest Rate × Years Financed) ÷ months. Generate the schedule below for exact figures.</div>
         </div>
 
         <button className="btn primary" style={{ marginTop: 10 }} onClick={regenerate}>{loan.schedule.length ? 'Regenerate Schedule' : 'Generate Schedule'}</button>
+        </>
+        )}
       </div>
 
       {loan.schedule.length > 0 && (
@@ -2268,17 +2286,24 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
       )}
 
       <div className="panel">
-        <h3>Import / Paste Your Own Schedule</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Copy the rows straight out of your bank's spreadsheet (including a "Status"/"Paid" column if it has one) and paste them below — no need to reformat dates or retype anything. This replaces the schedule above entirely. Supported layouts, auto-detected:</p>
-        <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4, paddingLeft: 18 }}>
-          <li><code>Inst No, Due Date, Principal, Profit, Total EMI, Payable, Paid, Balance, Status</code> — paid status is read from the Status/Paid columns automatically</li>
-          <li><code>Inst No, Date, EMI, Principal Balance, Principal, Profit, Rate</code></li>
-          <li><code>Number, Date, Principal, Interest</code></li>
-        </ul>
-        <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={4}
-          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
-          placeholder={"1, 2026-08, 5200.00, 1030.05\n2, 2026-09, 5240.85, 989.21"} />
-        <button className="btn primary" style={{ marginTop: 8 }} onClick={applyBulk}>Replace Schedule with Pasted Data</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0 }}>Import / Paste Your Own Schedule</h3>
+          <button className="btn small" onClick={() => setShowImport(!showImport)}>{showImport ? 'Hide' : 'Import / Paste Schedule'}</button>
+        </div>
+        {showImport && (
+          <>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 10 }}>Copy the rows straight out of your bank's spreadsheet (including a "Status"/"Paid" column if it has one) and paste them below — no need to reformat dates or retype anything. This replaces the schedule above entirely. Supported layouts, auto-detected:</p>
+            <ul style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4, paddingLeft: 18 }}>
+              <li><code>Inst No, Due Date, Principal, Profit, Total EMI, Payable, Paid, Balance, Status</code> — paid status is read from the Status/Paid columns automatically</li>
+              <li><code>Inst No, Date, EMI, Principal Balance, Principal, Profit, Rate</code></li>
+              <li><code>Number, Date, Principal, Interest</code></li>
+            </ul>
+            <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={4}
+              style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
+              placeholder={"1, 2026-08, 5200.00, 1030.05\n2, 2026-09, 5240.85, 989.21"} />
+            <button className="btn primary" style={{ marginTop: 8 }} onClick={applyBulk}>Replace Schedule with Pasted Data</button>
+          </>
+        )}
       </div>
     </div>
   );
