@@ -1972,8 +1972,9 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
   }
 
   const selected = loans.find(l => l.id === selectedId);
+  const displayLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
 
-  const fleetTotals = loans.reduce((acc, l) => {
+  const fleetTotals = displayLoans.reduce((acc, l) => {
     const s = loanStats(l);
     acc.principalBalance += s.balancePrincipal;
     acc.interestBalance += s.balanceInterest;
@@ -1989,7 +1990,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
     <div>
       {loans.length > 0 && (
         <div className="panel">
-          <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— controls which cars are included in Export Excel / Export PDF for this tab</span></h3>
+          <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— filters this whole tab (totals, chart, table) and what Export Excel / Export PDF include</span></h3>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <div className={`chip ${selectedLoanIds.length === 0 ? 'selected' : ''}`} onClick={onSelectAllLoans}>All Cars</div>
             {loans.map(l => (
@@ -2006,16 +2007,16 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
         <div className="kpi-card"><div className="label">Overdue Loans</div><div className="value mono" style={{ color: fleetTotals.overdueCount ? 'var(--red)' : 'var(--ink)' }}>{fleetTotals.overdueCount}</div></div>
       </div>
 
-      {loans.length > 0 && (
+      {displayLoans.length > 0 && (
         <div className="panel">
           <h3>Payment Progress by Vehicle</h3>
-          <HBarList data={loans.map(l => { const s = loanStats(l); return { name: l.modelName || '(unnamed)', value: Math.round(s.paidPct * 100), display: pctStr(s.paidPct) + ' · ' + fmt(s.paidAmount, currency), color: s.paidPct >= 1 ? '#3E9C6E' : '#2D6E8E' }; })} maxVal={100} />
+          <HBarList data={displayLoans.map(l => { const s = loanStats(l); return { name: l.modelName || '(unnamed)', value: Math.round(s.paidPct * 100), display: pctStr(s.paidPct) + ' · ' + fmt(s.paidAmount, currency), color: s.paidPct >= 1 ? '#3E9C6E' : '#2D6E8E' }; })} maxVal={100} />
         </div>
       )}
 
       <div className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <h3 style={{ margin: 0 }}>Vehicle Loans</h3>
+          <h3 style={{ margin: 0 }}>Vehicle Loans {selectedLoanIds.length > 0 ? `(${displayLoans.length} of ${loans.length} shown)` : ''}</h3>
           <button className="btn primary" onClick={addLoan}>+ Add Loan</button>
         </div>
         {loans.length === 0 ? (
@@ -2024,7 +2025,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
           <table>
             <thead><tr><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th>Next Due</th><th></th></tr></thead>
             <tbody>
-              {loans.map(l => {
+              {displayLoans.map(l => {
                 const s = loanStats(l);
                 return (
                   <tr key={l.id} style={{ background: l.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(l.id)}>
