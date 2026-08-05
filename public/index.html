@@ -84,6 +84,10 @@
     .print-only { display:block !important; }
     body { background:#fff; }
     .app { display:block; }
+    .print-only table { border-collapse: collapse; width: 100%; }
+    .print-only table th, .print-only table td { border: 1px solid #ccc !important; padding: 6px 8px; }
+    .print-only .panel { border: none; box-shadow: none; padding: 12px 0; }
+    .print-only .chip { border: 1px solid #ccc; pointer-events: none; }
   }
 </style>
 </head>
@@ -166,7 +170,7 @@ function monthLabel(period) {
   const [y, m] = period.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleString('default', { month: 'short' }) + '-' + String(y).slice(2);
 }
-function fmt(n, currency) { return currency + ' ' + Math.round(num(n)).toLocaleString(); }
+function fmt(n, currency) { return currency + ' ' + Math.round(num(n)).toLocaleString('en-US'); }
 function pctStr(n) { return isFinite(n) ? (n * 100).toFixed(1) + '%' : '—'; }
 
 function computeMonth(period, monthlyData, lineItems) {
@@ -611,6 +615,7 @@ function App() {
   const [loans, setLoans] = useState([]);
   const [printLoanId, setPrintLoanId] = useState(null);
   const [printMode, setPrintMode] = useState('cumulative');
+  const [selectedLoanIds, setSelectedLoanIds] = useState([]); // empty = all loans included
 
   const [reportFrom, setReportFrom] = useState(year + '-01');
   const [reportTo, setReportTo] = useState(year + '-12');
@@ -702,6 +707,27 @@ function App() {
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
+  const financingReportLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
+  function toggleLoanSelect(id) {
+    setSelectedLoanIds(prev => {
+      if (prev.length === 0) return [id];
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      return [...prev, id];
+    });
+  }
+
+  function resetLineItemsToDefault() {
+    if (!confirmDelete('all custom line items (revert to the default chart of accounts)', deletePin)) return;
+    setLineItems(defaultLineItems());
+  }
+  function clearAllPnlData() {
+    if (!confirmDelete('ALL P&L budget/actual entries, every month and year', deletePin)) return;
+    setMonthlyData({});
+  }
+  function clearAllOccupancyData() {
+    if (!confirmDelete('ALL occupancy entries, every month and year', deletePin)) return;
+    setOccupancy({});
+  }
 
   function downloadBackup() {
     const state = { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, backupDate: new Date().toISOString() };
@@ -857,9 +883,9 @@ function App() {
       return;
     }
     if (activeTab === 'financing') {
-      if (!loans.length) { window.alert('No loans to export yet.'); return; }
+      if (!financingReportLoans.length) { window.alert('No loans to export yet — add a loan, or check your car selection.'); return; }
       const wb = XLSX.utils.book_new();
-      const { summaryRows, scheduleRows } = buildLoanRows(loans);
+      const { summaryRows, scheduleRows } = buildLoanRows(financingReportLoans);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Loan Summary');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(scheduleRows), 'Loan Schedules');
       XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-loan-schedules.xlsx`);
@@ -952,9 +978,9 @@ function App() {
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
-          {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} />}
+          {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
-          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
         </div>
       </div>
@@ -984,7 +1010,7 @@ function App() {
         ) : printMode === 'feasibility' ? (
           <FeasibilityPrintReport studies={feasibilityStudies} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
         ) : printMode === 'financing' ? (
-          <FinancingPrintReport loans={loans} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
+          <FinancingPrintReport loans={financingReportLoans} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
         ) : (
           <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
         )}
@@ -995,10 +1021,10 @@ function App() {
 
 function PrintHeader({ companyName, logoDataUrl, subtitle }) {
   return (
-    <div style={{ marginBottom: 18 }}>
-      {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, display: 'block' }} />}
-      <h1 style={{ fontSize: 20 }}>{companyName}</h1>
-      <p style={{ color: 'var(--muted)', marginTop: 4 }}>{subtitle}</p>
+    <div style={{ background: 'linear-gradient(135deg,#161B26,#2D6E8E)', borderRadius: 10, padding: '18px 22px', marginBottom: 18 }}>
+      {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, background: '#fff', borderRadius: 6, padding: 4, display: 'block' }} />}
+      <h1 style={{ fontSize: 20, color: '#fff', margin: 0 }}>{companyName}</h1>
+      <p style={{ color: 'rgba(255,255,255,0.8)', marginTop: 4 }}>{subtitle}</p>
     </div>
   );
 }
@@ -1039,34 +1065,46 @@ function FinancingPrintReport({ loans, currency, companyName, logoDataUrl }) {
     acc.totalPaid += s.paidAmount;
     return acc;
   }, { principalBalance: 0, interestBalance: 0, totalFinanced: 0, totalPaid: 0 });
+  const fleetPaidPct = fleetTotals.totalFinanced ? fleetTotals.totalPaid / fleetTotals.totalFinanced : 0;
+  const barData = loans.map(l => { const s = loanStats(l); return { label: l.modelName || '(unnamed)', total: s.totalAmount, paid: s.paidAmount }; });
 
   return (
     <div style={{ padding: 24 }}>
-      <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle="Vehicle Financing Overview" />
+      <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Vehicle Financing Overview — ${loans.map(l => l.modelName || '(unnamed)').join(', ') || 'No cars selected'}`} />
+
       <div className="kpi-row">
-        <div className="kpi-card"><div className="label">Total Financed</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
-        <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono">{fmt(fleetTotals.totalPaid, currency)}</div></div>
-        <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Loan Amount (Payable)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(fleetTotals.totalPaid, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Balance</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
       </div>
+
+      <div className="grid-2">
+        <div className="panel" style={{ textAlign: 'center' }}>
+          <h3>Overall Paid %</h3>
+          <DonutGauge pct={fleetPaidPct} color={fleetPaidPct >= 1 ? '#3E9C6E' : '#2D6E8E'} />
+        </div>
+        <div className="panel">
+          <h3>Loan Amount vs Paid, by Vehicle</h3>
+          <GroupedBarChart data={barData} series={[{ key: 'total', label: 'Loan Amount', color: '#D9C8B9' }, { key: 'paid', label: 'Paid', color: '#2D6E8E' }]} height={160} />
+        </div>
+      </div>
+
       <table style={{ border: '1px solid #ccc' }}>
-        <thead><tr>{['Vehicle', 'Lender', 'Loan Amount', 'Monthly EMI', 'Paid %', 'Principal Balance', 'Interest Balance', 'Next Due'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <thead><tr>{['Vehicle', 'Loan Amount', 'Paid', 'Balance', '% Paid'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
         <tbody>
           {loans.map(l => {
             const s = loanStats(l);
             return (
               <tr key={l.id}>
                 <td style={{ border: '1px solid #ccc' }}>{l.modelName}</td>
-                <td style={{ border: '1px solid #ccc' }}>{l.lender || '—'}</td>
-                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(loanAmount(l), currency)}</td>
-                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.monthlyEMI, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.totalAmount, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.paidAmount, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balanceAmount, currency)}</td>
                 <td style={{ border: '1px solid #ccc' }} className="num">{pctStr(s.paidPct)}</td>
-                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balancePrincipal, currency)}</td>
-                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balanceInterest, currency)}</td>
-                <td style={{ border: '1px solid #ccc' }}>{s.nextDue ? fullDateLabel(s.nextDue.dueDate) : 'Paid off'}</td>
               </tr>
             );
           })}
-          {loans.length === 0 && <tr><td colSpan={8} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No loans added yet.</td></tr>}
+          {loans.length === 0 && <tr><td colSpan={5} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No loans added yet.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -1088,6 +1126,12 @@ function KpiCard({ label, value, sub, diff }) {
 function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin }) {
   const [period, setPeriod] = useState(monthKeys[0]);
   const [newItemText, setNewItemText] = useState({});
+  const [bulkItemKey, setBulkItemKey] = useState('');
+  const [bulkFrom, setBulkFrom] = useState(monthKeys[0]);
+  const [bulkTo, setBulkTo] = useState(monthKeys[monthKeys.length - 1]);
+  const [bulkField, setBulkField] = useState('budget');
+  const [bulkMode, setBulkMode] = useState('flat');
+  const [bulkAmount, setBulkAmount] = useState('');
 
   function setCell(itemKey, field, value) {
     setMonthlyData(prev => {
@@ -1106,6 +1150,40 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
     if (!confirmDelete(label, deletePin)) return;
     setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].filter(i => i.key !== key) }));
   }
+  function renameItem(sectionKey, key, newLabel) {
+    setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].map(it => it.key === key ? { ...it, label: newLabel } : it) }));
+  }
+
+  function applyBulkBudget() {
+    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
+    const months = periodsBetween(bulkFrom, bulkTo);
+    if (!months.length) return;
+    const amt = num(bulkAmount);
+    const perMonthAmt = bulkMode === 'spread' ? amt / months.length : amt;
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      months.forEach(p => {
+        next[p] = { ...(next[p] || {}) };
+        next[p][bulkItemKey] = { ...(next[p][bulkItemKey] || {}), [bulkField]: perMonthAmt };
+      });
+      return next;
+    });
+  }
+
+  function clearBulkRange() {
+    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
+    const itemLabel = Object.values(lineItems).flat().find(i => i.key === bulkItemKey)?.label || 'this item';
+    if (!window.confirm(`Clear ${bulkField} for "${itemLabel}" from ${monthLabel(bulkFrom)} to ${monthLabel(bulkTo)}? This cannot be undone.`)) return;
+    const months = periodsBetween(bulkFrom, bulkTo);
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      months.forEach(p => {
+        if (!next[p] || !next[p][bulkItemKey]) return;
+        next[p] = { ...next[p], [bulkItemKey]: { ...next[p][bulkItemKey], [bulkField]: '' } };
+      });
+      return next;
+    });
+  }
 
   const c = computeMonth(period, monthlyData, lineItems);
 
@@ -1118,7 +1196,7 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
             const cellVal = (monthlyData[period] || {})[item.key] || {};
             return (
               <tr key={item.key}>
-                <td>{item.label}</td>
+                <td><input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)} style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit' }} /></td>
                 <td className="num"><input type="number" value={cellVal.budget || ''} onChange={e => setCell(item.key, 'budget', e.target.value)} /></td>
                 <td className="num"><input type="number" value={cellVal.actual || ''} onChange={e => setCell(item.key, 'actual', e.target.value)} /></td>
                 <td><button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)}>✕</button></td>
@@ -1144,6 +1222,46 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
           <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
         </div>
       </div>
+
+      <div className="panel">
+        <h3>Set Budget for a Period</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Apply one figure across the full year, a specific month, or any custom range — instead of retyping the same number 12 times. Works for Budget or Actual.</p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="field" style={{ flex: '1 1 220px' }}>
+            <label>Line Item</label>
+            <select value={bulkItemKey} onChange={e => setBulkItemKey(e.target.value)}>
+              <option value="">Select a line item…</option>
+              {Object.keys(lineItems).map(sec => (
+                <optgroup key={sec} label={SECTION_META[sec].title}>
+                  {lineItems[sec].map(it => <option key={it.key} value={it.key}>{it.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          <div className="field"><label>From</label><input type="month" value={bulkFrom} onChange={e => setBulkFrom(e.target.value)} /></div>
+          <div className="field"><label>To</label><input type="month" value={bulkTo} onChange={e => setBulkTo(e.target.value)} /></div>
+          <div className="field"><label>Apply to</label>
+            <select value={bulkField} onChange={e => setBulkField(e.target.value)}>
+              <option value="budget">Budget</option>
+              <option value="actual">Actual</option>
+            </select>
+          </div>
+          <div className="field"><label>Mode</label>
+            <select value={bulkMode} onChange={e => setBulkMode(e.target.value)}>
+              <option value="flat">Same amount every month</option>
+              <option value="spread">Total for period, spread evenly</option>
+            </select>
+          </div>
+          <div className="field"><label>{bulkMode === 'spread' ? 'Total Amount' : 'Amount / Month'} ({currency})</label><input type="number" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          <button className="btn small" onClick={() => { setBulkFrom(monthKeys[0]); setBulkTo(monthKeys[monthKeys.length - 1]); }}>Full Year</button>
+          <button className="btn small" onClick={() => { setBulkFrom(period); setBulkTo(period); }}>Just Current Month</button>
+          <button className="btn primary" onClick={applyBulkBudget}>Apply</button>
+          <button className="btn danger" onClick={clearBulkRange}>Clear This Range</button>
+        </div>
+      </div>
+
       {renderSection('revenue')}
       {renderSection('direct')}
       {renderSection('indirect')}
@@ -1572,7 +1690,7 @@ function FeasibilityDetail({ study, onChange, currency }) {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
           <div className="field" style={{ flex: '1 1 150px' }}><label>Useful Life (Years)</label><input type="number" value={study.usefulLifeYears} onChange={e => onChange({ usefulLifeYears: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 150px' }}><label>Working Days / Month</label><input type="number" value={study.workingDaysPerMonth} onChange={e => onChange({ workingDaysPerMonth: e.target.value })} /></div>
-          <div className="field" style={{ flex: '1 1 150px' }}><label>Total Working Days (life)</label><input disabled value={c.totalWorkingDays.toLocaleString()} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Total Working Days (life)</label><input disabled value={c.totalWorkingDays.toLocaleString('en-US')} /></div>
         </div>
       </div>
 
@@ -1651,7 +1769,7 @@ function FeasibilityDetail({ study, onChange, currency }) {
 
 /* ---------------- Vehicle Financing ---------------- */
 
-function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan }) {
+function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan, selectedLoanIds, onToggleLoanSelect, onSelectAllLoans }) {
   const [selectedId, setSelectedId] = useState(loans[0] ? loans[0].id : null);
 
   function addLoan() {
@@ -1684,8 +1802,20 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
 
   return (
     <div>
+      {loans.length > 0 && (
+        <div className="panel">
+          <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— controls which cars are included in Export Excel / Export PDF for this tab</span></h3>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className={`chip ${selectedLoanIds.length === 0 ? 'selected' : ''}`} onClick={onSelectAllLoans}>All Cars</div>
+            {loans.map(l => (
+              <div key={l.id} className={`chip ${selectedLoanIds.includes(l.id) ? 'selected' : ''}`} onClick={() => onToggleLoanSelect(l.id)}>{l.modelName || '(unnamed)'}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="kpi-row">
-        <div className="kpi-card"><div className="label">Total Financed (all loans)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Loan Amount (Payable)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
         <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(fleetTotals.totalPaid, currency)}</div><div className="sub" style={{ color: 'var(--muted)' }}>{pctStr(fleetPaidPct)} of total</div></div>
         <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
         <div className="kpi-card"><div className="label">Overdue Loans</div><div className="value mono" style={{ color: fleetTotals.overdueCount ? 'var(--red)' : 'var(--ink)' }}>{fleetTotals.overdueCount}</div></div>
@@ -1802,7 +1932,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
         number = parts[0]; dateStr = parts[1]; principal = parseAmt(parts[2]); interest = parseAmt(parts[3]);
       }
       const dueDate = parseFlexibleDate(dateStr);
-      return { id: uid('inst'), number: num(number), dueDate, principal, interest, paid, paidDate: paid ? (dueDate + '-01') : '' };
+      return { id: uid('inst'), number: num(number), dueDate, principal, interest, paid, paidDate: paid ? dueDate : '' };
     }).filter(r => r.number).sort((a, b) => a.number - b.number);
     onChange({ schedule: rows });
     setBulkText('');
@@ -1844,6 +1974,19 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
           <div className="field" style={{ flex: '1 1 140px' }}><label>Start Date (exact auto-debit day)</label><input type="date" value={loan.startDate && loan.startDate.length === 7 ? loan.startDate + '-01' : loan.startDate} onChange={e => onChange({ startDate: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Loan Amount</label><input disabled value={fmt(loanAmount(loan), currency)} /></div>
         </div>
+
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+          <div style={{ flex: '1 1 160px' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated Monthly EMI</div>
+            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loan.interestRate, loanTermMonths(loan)), currency)}</div>
+          </div>
+          <div style={{ flex: '1 1 200px' }}>
+            <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated Total Payable (Loan + Interest)</div>
+            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loan.interestRate, loanTermMonths(loan)) * loanTermMonths(loan), currency)}</div>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', alignSelf: 'flex-end' }}>= Loan Amount + total interest over the term, ÷ months. Generate the schedule below for exact figures.</div>
+        </div>
+
         <button className="btn primary" style={{ marginTop: 10 }} onClick={regenerate}>{loan.schedule.length ? 'Regenerate Schedule' : 'Generate Schedule'}</button>
       </div>
 
@@ -1851,6 +1994,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
         <>
           <div className="kpi-row">
             <div className="kpi-card"><div className="label">Monthly EMI</div><div className="value mono">{fmt(stats.monthlyEMI, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Total Payable (Loan + Interest)</div><div className="value mono">{fmt(stats.totalAmount, currency)}</div></div>
             <div className="kpi-card"><div className="label">Principal Balance</div><div className="value mono">{fmt(stats.balancePrincipal, currency)}</div></div>
             <div className="kpi-card"><div className="label">Interest Balance</div><div className="value mono">{fmt(stats.balanceInterest, currency)}</div></div>
             <div className="kpi-card"><div className="label">Payoff Date</div><div className="value mono" style={{ fontSize: 18 }}>{stats.payoffDate ? fullDateLabel(stats.payoffDate) : '—'}</div></div>
@@ -2072,7 +2216,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
             {filtered.map(v => (
               <tr key={v.id}>
                 <td>{v.name}</td><td>{v.plate}</td>
-                <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString() : '—'}</td>
+                <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString('en-US') : '—'}</td>
                 <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : 'default'}</td>
                 <td style={{ textAlign: 'right' }}>
                   <button className="icon-btn" onClick={() => editVehicle(v)}>✎</button>{' '}
@@ -2090,7 +2234,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
 
 /* ---------------- Settings ---------------- */
 
-function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup }) {
+function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup, onResetLineItems, onClearPnl, onClearOccupancy }) {
   const [pinInput, setPinInput] = useState(deletePin);
   const [logoError, setLogoError] = useState('');
 
@@ -2143,6 +2287,15 @@ function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUr
       <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h3>Site Password</h3>
       <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>The password to open this app is set via the <code>APP_PASSWORD</code> environment variable in your Netlify site's dashboard (Site settings → Environment variables). Update it there and redeploy to change it.</p>
+
+      <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+      <h3 style={{ color: 'var(--red)' }}>Danger Zone</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>Use these if you need a clean slate before entering new data. Download a backup first if there's any chance you'll want the old data back — these cannot be undone.</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+        <button className="btn danger" onClick={onResetLineItems}>Reset Line Items to Default Chart of Accounts</button>
+        <button className="btn danger" onClick={onClearPnl}>Clear All P&amp;L Budget/Actual Entries</button>
+        <button className="btn danger" onClick={onClearOccupancy}>Clear All Occupancy Entries</button>
+      </div>
     </div>
   );
 }
@@ -2192,7 +2345,10 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
       const data = new Uint8Array(evt.target.result);
       const wb = XLSX.read(data, { type: 'array' });
       const sheetObj = {};
-      wb.SheetNames.forEach(name => { sheetObj[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' }); });
+      // raw:false returns the same formatted text you see in Excel (e.g. "58,850", "49%") instead
+      // of the underlying stored number — this matters because percentage-formatted cells store
+      // 49% internally as 0.49, which would otherwise import as a near-zero decimal.
+      wb.SheetNames.forEach(name => { sheetObj[name] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' }); });
       setSheets(sheetObj);
       setSheetNames(wb.SheetNames);
       const first = wb.SheetNames[0];
