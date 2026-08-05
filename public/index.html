@@ -37,6 +37,21 @@
   .btn.danger { color:var(--red); border-color:var(--red); }
   .btn.small { padding:4px 9px; font-size:12px; }
   .main-scroll { flex:1; overflow:auto; padding:20px 22px; }
+  .mobile-menu-btn { display:none; }
+  .sidebar-overlay { display:none; }
+  @media (max-width: 860px) {
+    .app { position: relative; overflow-x: hidden; }
+    .sidebar { position:fixed; top:0; bottom:0; left:-230px; width:210px; z-index:200; transition:left 0.2s ease; box-shadow: 2px 0 12px rgba(0,0,0,0.25); }
+    .sidebar.mobile-open { left:0; }
+    .sidebar-overlay.show { display:block; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:150; }
+    .mobile-menu-btn { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:18px; cursor:pointer; flex-shrink:0; }
+    .topbar { padding:10px 14px; gap:8px; }
+    .topbar .filters { width:100%; order:3; }
+    .main-scroll { padding:14px; }
+    .kpi-row { grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap:10px; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .actions { flex-wrap:wrap; }
+  }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
   .panel h3 { font-size:13.5px; margin:0 0 12px 0; display:flex; align-items:center; gap:7px; text-transform:uppercase; letter-spacing:0.04em; }
   .kpi-row { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:14px; margin-bottom:16px; }
@@ -638,6 +653,8 @@ function App() {
   const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
   const [lastSaved, setLastSaved] = useState(null);
   const [showReauth, setShowReauth] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [reauthPw, setReauthPw] = useState('');
 
   async function apiCall(method, body, pwOverride) {
@@ -720,6 +737,21 @@ function App() {
     return () => clearTimeout(t);
   }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, loaded, authed]);
 
+  // If the connection drops mid-session, a save fails and shows "Not saved" — once the
+  // browser detects the connection is back, retry automatically instead of waiting for
+  // the user to make another edit.
+  useEffect(() => {
+    function handleOnline() {
+      setIsOnline(true);
+      if (loaded && authed && saveStatus === 'error') performSave();
+    }
+    function handleOffline() { setIsOnline(false); }
+    setIsOnline(navigator.onLine);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+  }, [loaded, authed, saveStatus]);
+
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
   const financingReportLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
@@ -778,7 +810,7 @@ function App() {
   }
 
   function restoreBackup(file) {
-    if (!window.confirm('Restoring will REPLACE all current data (vehicles, P&L entries, occupancy) with the contents of this backup file. This cannot be undone. Continue?')) return;
+    if (!confirmDelete('ALL current data — vehicles, P&L entries, occupancy, loans, everything — replacing it with this backup file', deletePin)) return;
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -950,11 +982,11 @@ function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar no-print">
+      <aside className={`sidebar no-print ${mobileNavOpen ? 'mobile-open' : ''}`}>
         <div className="brand">
           {logoDataUrl ? <img src={logoDataUrl} alt="logo" style={{ height: 26, maxWidth: 150, objectFit: 'contain' }} /> : <>🚗 <span>{companyName || 'FleetIQ'}</span></>}
         </div>
-        <nav>
+        <nav onClick={() => setMobileNavOpen(false)}>
           <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>
           <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
           <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
@@ -971,9 +1003,11 @@ function App() {
         </nav>
         <div className="sidebar-footer">Signed in · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); setAuthed(false); setPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span></div>
       </aside>
+      <div className={`sidebar-overlay no-print ${mobileNavOpen ? 'show' : ''}`} onClick={() => setMobileNavOpen(false)} />
 
       <div className="content">
         <header className="topbar no-print">
+          <button className="mobile-menu-btn" onClick={() => setMobileNavOpen(true)}>☰</button>
           <div>
             <div className="display" style={{ fontSize: 16 }}>{companyName}</div>
             <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Fleet Financial Report — {year}</div>
@@ -994,6 +1028,13 @@ function App() {
             <button className="btn primary" onClick={handlePrintCumulative} title="Quick Review + P&L + Occupancy + ROI, all in one PDF">📑 Cumulative Report</button>
           </div>
         </header>
+
+        {!isOnline && (
+          <div className="no-print" style={{ background: '#FFF6E8', borderBottom: '1px solid var(--amber)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>⚠ You're offline.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>You can keep working — your entries stay right here in this tab — but nothing will save until your connection comes back. It'll sync automatically the moment you're back online.</span>
+          </div>
+        )}
 
         {showReauth && (
           <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1285,7 +1326,7 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
   function clearBulkRange() {
     if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
     const itemLabel = Object.values(lineItems).flat().find(i => i.key === bulkItemKey)?.label || 'this item';
-    if (!window.confirm(`Clear ${bulkField} for "${itemLabel}" from ${monthLabel(bulkFrom)} to ${monthLabel(bulkTo)}? This cannot be undone.`)) return;
+    if (!confirmDelete(`${bulkField} for "${itemLabel}" from ${monthLabel(bulkFrom)} to ${monthLabel(bulkTo)}`, deletePin)) return;
     const months = periodsBetween(bulkFrom, bulkTo);
     setMonthlyData(prev => {
       const next = { ...prev };
@@ -1466,13 +1507,16 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
           <thead>
             <tr>
               <th>Particulars</th>
-              {monthKeys.map(p => (
-                <Fragment key={p}>
-                  <th className="num">{monthLabel(p)} Budget</th>
-                  <th className="num">{monthLabel(p)} Actual</th>
-                  <th className="num">Var %</th>
-                </Fragment>
-              ))}
+              {monthKeys.map((p, mi) => {
+                const tint = mi % 2 === 1 ? '#F7F8F5' : undefined;
+                return (
+                  <Fragment key={p}>
+                    <th className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{monthLabel(p)} Budget</th>
+                    <th className="num" style={{ background: tint }}>{monthLabel(p)} Actual</th>
+                    <th className="num" style={{ background: tint }}>Var %</th>
+                  </Fragment>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -1482,7 +1526,8 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
               return (
                 <tr key={idx} className={rowClass}>
                   <td>{row.label}</td>
-                  {monthKeys.map(p => {
+                  {monthKeys.map((p, mi) => {
+                    const tint = mi % 2 === 1 ? '#F7F8F5' : undefined;
                     let budget, actual;
                     if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget = num(md.budget); actual = num(md.actual); }
                     else { const c = computeMonth(p, monthlyData, lineItems); budget = c[row.key + '_budget']; actual = c[row.key + '_actual']; }
@@ -1490,18 +1535,18 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
                       const ptDiff = actual - budget;
                       return (
                         <Fragment key={p}>
-                          <td className="num">{pctStr(budget)}</td>
-                          <td className="num">{pctStr(actual)}</td>
-                          <td className="num"><span className={`badge ${ptDiff >= 0 ? 'pos' : 'neg'}`}>{(ptDiff >= 0 ? '+' : '') + (ptDiff * 100).toFixed(1) + 'pt'}</span></td>
+                          <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{pctStr(budget)}</td>
+                          <td className="num" style={{ background: tint }}>{pctStr(actual)}</td>
+                          <td className="num" style={{ background: tint }}><span className={`badge ${ptDiff >= 0 ? 'pos' : 'neg'}`}>{(ptDiff >= 0 ? '+' : '') + (ptDiff * 100).toFixed(1) + 'pt'}</span></td>
                         </Fragment>
                       );
                     }
                     const v = rowVariance(budget, actual, row.kind);
                     return (
                       <Fragment key={p}>
-                        <td className="num">{fmt(budget, currency)}</td>
-                        <td className="num">{fmt(actual, currency)}</td>
-                        <td className="num"><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span></td>
+                        <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{fmt(budget, currency)}</td>
+                        <td className="num" style={{ background: tint }}>{fmt(actual, currency)}</td>
+                        <td className="num" style={{ background: tint }}><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span></td>
                       </Fragment>
                     );
                   })}
@@ -1966,6 +2011,15 @@ function FeasibilityDetail({ study, onChange, currency }) {
 function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrintLoan, selectedLoanIds, onToggleLoanSelect, onSelectAllLoans }) {
   const [selectedId, setSelectedId] = useState(loans[0] ? loans[0].id : null);
 
+  // When the Report Selection chips narrow down to exactly one car, show that same car's
+  // full detail below — otherwise clicking a chip filters the table but leaves whichever
+  // loan was previously open showing, which looks like a mismatch/glitch.
+  useEffect(() => {
+    if (selectedLoanIds.length === 1) {
+      setSelectedId(selectedLoanIds[0]);
+    }
+  }, [selectedLoanIds]);
+
   function addLoan() {
     const l = emptyLoan();
     setLoans([...loans, l]);
@@ -2054,12 +2108,12 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
         )}
       </div>
 
-      {selected && <FinancingDetail loan={selected} vehicles={vehicles} onChange={patch => updateLoan(selected.id, patch)} currency={currency} onPrint={() => onPrintLoan(selected.id)} />}
+      {selected && <FinancingDetail loan={selected} vehicles={vehicles} onChange={patch => updateLoan(selected.id, patch)} currency={currency} onPrint={() => onPrintLoan(selected.id)} deletePin={deletePin} />}
     </div>
   );
 }
 
-function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
+function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePin }) {
   const stats = loanStats(loan);
   const [deferFrom, setDeferFrom] = useState(stats.nextDue ? stats.nextDue.number : 1);
   const [deferMonths, setDeferMonths] = useState(1);
@@ -2069,7 +2123,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
   const [showImport, setShowImport] = useState(false);
 
   function regenerate() {
-    if (loan.schedule.some(r => r.paid) && !window.confirm('This loan already has paid installments recorded. Regenerating will replace the ENTIRE schedule and lose that paid history. Continue?')) return;
+    if (loan.schedule.some(r => r.paid) && !confirmDelete('this loan\'s ENTIRE schedule, including its paid installment history', deletePin)) return;
     onChange({ schedule: generateSchedule(loan) });
   }
 
@@ -2097,6 +2151,7 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint }) {
   }
 
   function applyBulk() {
+    if (loan.schedule.some(r => r.paid) && !confirmDelete('this loan\'s ENTIRE schedule, including its paid installment history', deletePin)) return;
     const parseAmt = (v) => {
       if (v === undefined || v === null) return 0;
       let s = String(v).trim();
@@ -2488,7 +2543,7 @@ function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUr
         <label>Delete Confirmation PIN (optional)</label>
         <input value={pinInput} onChange={e => setPinInput(e.target.value)} placeholder="Leave blank for confirm-only" />
       </div>
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>When set, deleting a vehicle or line item asks for this PIN in addition to a confirmation — helps prevent accidental data loss.</p>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 0 }}>When set, this PIN is required (in addition to a confirmation prompt) for every destructive action in the app: deleting a vehicle, line item, feasibility study, or loan; the Danger Zone actions below; restoring a backup; clearing a budget range; and replacing or regenerating a loan's payment schedule.</p>
       <button className="btn primary" onClick={() => setDeletePin(pinInput)}>Save PIN</button>
 
       <hr style={{ margin: '18px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
