@@ -63,9 +63,11 @@
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.02em; padding:6px 7px; border-bottom:1px solid var(--line); white-space:nowrap; }
   td { padding:5px 7px; border-bottom:1px solid #EEEFEA; white-space:nowrap; }
-  tr.section-row td { font-weight:700; background:#F7F8F5; text-transform:uppercase; font-size:11px; letter-spacing:0.03em; color:var(--steel); }
+  tr.section-row td { font-weight:700; background:var(--navy); text-transform:uppercase; font-size:11.5px; letter-spacing:0.04em; color:#fff; padding:7px 8px; }
   tr.subtotal-row td { font-weight:700; background:#FBFAF6; }
+  tr.totalexp-row td { font-weight:700; background:#EAE2D4; color:#7A5A1E; }
   tr.net-row td { font-weight:700; background:#EFF4F1; color:var(--steel); font-size:13.5px; }
+  tr.income-row td { background:#EEF6F1; }
   .num { font-family:'Roboto Mono',monospace; text-align:right; font-variant-numeric:tabular-nums; }
   td input { width:88px; border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; box-sizing:border-box; font-family:'Roboto Mono',monospace; text-align:right; }
   .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; border-radius:20px; font-size:11px; font-weight:600; }
@@ -93,16 +95,22 @@
   .login-box { background:#fff; border-radius:12px; padding:34px; width:340px; text-align:center; }
   .login-box input { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 12px; font-size:14px; margin:14px 0; box-sizing:border-box; }
   .print-only { display:none; }
-  @page { size: landscape; margin: 12mm; }
+  @page { size: landscape; margin: 10mm; }
   @media print {
     .no-print { display:none !important; }
     .print-only { display:block !important; }
     body { background:#fff; }
     .app { display:block; }
-    .print-only table { border-collapse: collapse; width: 100%; }
-    .print-only table th, .print-only table td { border: 1px solid #ccc !important; padding: 6px 8px; }
-    .print-only .panel { border: none; box-shadow: none; padding: 12px 0; }
+    .print-only table { border-collapse: collapse; width: 100%; font-size: 10.5px; }
+    .print-only table th, .print-only table td { border: 1px solid #ccc !important; padding: 3px 6px !important; line-height: 1.2; }
+    .print-only .panel { border: none; box-shadow: none; padding: 6px 0; margin-bottom: 8px !important; }
+    .print-only .kpi-row { gap: 8px; margin-bottom: 10px !important; }
+    .print-only .kpi-card { padding: 8px 10px; }
+    .print-only .kpi-card .value { font-size: 15px; }
+    .print-only h1 { font-size: 16px; margin: 0; }
+    .print-only h3 { font-size: 11.5px; margin-bottom: 6px; }
     .print-only .chip { border: 1px solid #ccc; pointer-events: none; }
+    .print-only tr.section-row td { padding: 4px 6px !important; }
   }
 </style>
 </head>
@@ -160,7 +168,7 @@ const SECTION_META = {
   direct: { title: 'Direct Expenses', kind: 'expense' },
   indirect: { title: 'Indirect Expenses', kind: 'expense' },
   interest: { title: 'Interest & Bank Charges', kind: 'expense' },
-  belowLine: { title: 'Other (Below the Line)', kind: 'income' },
+  belowLine: { title: 'Other Income (Profit on Sale, etc.)', kind: 'income' },
 };
 
 const COLORS = ['#2D6E8E', '#3E9C6E', '#D98E3F', '#8C6BB1', '#C1503F', '#4E5D78'];
@@ -256,6 +264,7 @@ function buildPnlDetailRows(rangeMonths, lineItems, monthlyData) {
   pushSection('indirect', 'Total Indirect Expenses', 'indirect');
   detailRows.push(['EBITDA', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.ebitda_budget, c.ebitda_actual]; })]);
   pushSection('interest', 'Total Interest & Bank Charges', 'interest');
+  detailRows.push(['Total Expenses (Direct + Indirect + Bank Charges)', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.totalexp_budget, c.totalexp_actual]; })]);
   pushSection('belowLine', null, null);
   detailRows.push(['Net Profit', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c.netprofit_budget, c.netprofit_actual]; })]);
   detailRows.push(['Net Profit %', ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [pctStr(c.netPct_budget), pctStr(c.netPct_actual)]; })]);
@@ -656,14 +665,21 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [reauthPw, setReauthPw] = useState('');
+  const [licenseKey, setLicenseKey] = useState('');
+  const [licenseError, setLicenseError] = useState('');
 
-  async function apiCall(method, body, pwOverride) {
+  async function apiCall(method, body, pwOverride, licOverride) {
     const res = await fetch('/api/data', {
       method,
-      headers: { 'content-type': 'application/json', 'x-app-password': pwOverride !== undefined ? pwOverride : password },
+      headers: {
+        'content-type': 'application/json',
+        'x-app-password': pwOverride !== undefined ? pwOverride : password,
+        'x-license-key': licOverride !== undefined ? licOverride : licenseKey,
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (res.status === 401) throw new Error('unauthorized');
+    if (res.status === 403) throw new Error('unlicensed');
     return res.json();
   }
 
@@ -692,12 +708,15 @@ function App() {
     setReauthPw('');
   }
 
-  async function tryLogin(pw) {
+  async function tryLogin(pw, lic) {
     setAuthError('');
+    setLicenseError('');
     try {
       const savedPw = pw;
-      const res = await fetch('/api/data', { headers: { 'x-app-password': savedPw } });
+      const savedLic = lic || '';
+      const res = await fetch('/api/data', { headers: { 'x-app-password': savedPw, 'x-license-key': savedLic } });
       if (res.status === 401) { setAuthError('Incorrect password.'); return; }
+      if (res.status === 403) { setLicenseError('Invalid or missing license key. Contact Sajid Ali (the developer) for a valid key.'); return; }
       const data = await res.json();
       if (data) {
         if (data.companyName) setCompanyName(data.companyName);
@@ -718,7 +737,9 @@ function App() {
         if (data.reportTo) setReportTo(data.reportTo);
       }
       setPassword(savedPw);
+      setLicenseKey(savedLic);
       sessionStorage.setItem('fleet_app_pw', savedPw);
+      sessionStorage.setItem('fleet_app_lic', savedLic);
       setAuthed(true);
       setLoaded(true);
     } catch (e) {
@@ -728,7 +749,8 @@ function App() {
 
   useEffect(() => {
     const saved = sessionStorage.getItem('fleet_app_pw');
-    if (saved !== null) tryLogin(saved);
+    const savedLic = sessionStorage.getItem('fleet_app_lic');
+    if (saved !== null) tryLogin(saved, savedLic || '');
   }, []);
 
   useEffect(() => {
@@ -973,9 +995,14 @@ function App() {
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>Enter the site password to continue</p>
           <input type="password" placeholder="Password" value={password}
             onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password); }} />
+            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey); }} />
+          <input type="text" placeholder="License Key (if required)" value={licenseKey}
+            onChange={e => setLicenseKey(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey); }} />
           {authError && <div style={{ color: 'var(--red)', fontSize: 12.5, marginBottom: 10 }}>{authError}</div>}
-          <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => tryLogin(password)}>Enter</button>
+          {licenseError && <div style={{ color: 'var(--red)', fontSize: 12.5, marginBottom: 10 }}>{licenseError}</div>}
+          <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => tryLogin(password, licenseKey)}>Enter</button>
+          <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 16, marginBottom: 0 }}>Designed &amp; developed by Sajid Ali</p>
         </div>
       </div>
     );
@@ -1002,7 +1029,7 @@ function App() {
           <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
           <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
         </nav>
-        <div className="sidebar-footer">Signed in · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); setAuthed(false); setPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span></div>
+        <div className="sidebar-footer">Signed in · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); sessionStorage.removeItem('fleet_app_lic'); setAuthed(false); setPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span><br />Designed &amp; developed by Sajid Ali</div>
       </aside>
       <div className={`sidebar-overlay no-print ${mobileNavOpen ? 'show' : ''}`} onClick={() => setMobileNavOpen(false)} />
 
@@ -1349,8 +1376,8 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
   };
 
   const renderSection = (sectionKey) => (
-    <div className="panel" key={sectionKey}>
-      <h3 style={{ textAlign: 'left' }}>{SECTION_META[sectionKey].title}</h3>
+    <div className="panel" key={sectionKey} style={sectionKey === 'belowLine' ? { border: '1px solid var(--green)', background: 'rgba(62,156,110,0.04)' } : undefined}>
+      <h3 style={{ textAlign: 'left', color: sectionKey === 'belowLine' ? 'var(--green)' : undefined }}>{sectionKey === 'belowLine' ? '+ ' : ''}{SECTION_META[sectionKey].title}</h3>
       <table>
         <thead><tr><th style={{ textAlign: 'left' }}>Line Item</th><th className="num">Budget ({currency})</th><th className="num">Actual ({currency})</th><th></th></tr></thead>
         <tbody>
@@ -1441,9 +1468,23 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
       </div>
 
       {renderSection('interest')}
+
+      <div className="panel" style={{ background: '#EAE2D4', border: 'none' }}>
+        <table>
+          <tbody>
+            <tr className="totalexp-row">
+              <td style={{ textAlign: 'left', fontWeight: 700 }}>Total Expenses (Direct + Indirect + Bank Charges)</td>
+              <td className="num" style={{ width: 160 }}>{fmt(c.totalexp_budget, currency)}</td>
+              <td className="num" style={{ width: 160 }}>{fmt(c.totalexp_actual, currency)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       {renderSection('belowLine')}
       <div className="kpi-row">
         <KpiCard label="Total Income" value={fmt(c.income_actual, currency)} sub={`Budget ${fmt(c.income_budget, currency)}`} diff={c.income_actual - c.income_budget} />
+        <KpiCard label="Total Expenses" value={fmt(c.totalexp_actual, currency)} sub={`Budget ${fmt(c.totalexp_budget, currency)}`} diff={c.totalexp_budget - c.totalexp_actual} />
         <KpiCard label="Gross Profit" value={fmt(c.gross_actual, currency)} sub={`Budget ${fmt(c.gross_budget, currency)}`} diff={c.gross_actual - c.gross_budget} />
         <KpiCard label="EBITDA" value={fmt(c.ebitda_actual, currency)} sub={`Budget ${fmt(c.ebitda_budget, currency)}`} diff={c.ebitda_actual - c.ebitda_budget} />
         <KpiCard label="Net Profit" value={fmt(c.netprofit_actual, currency)} sub={`Budget ${fmt(c.netprofit_budget, currency)}`} diff={c.netprofit_actual - c.netprofit_budget} />
@@ -1469,7 +1510,10 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
         rows.push({ type: 'ratio', key: 'grossPct', label: 'Gross Profit %' });
       }
       if (sec === 'indirect') { rows.push({ type: 'subtotal', key: 'indirect', label: 'Total Indirect Expenses', kind: 'expense' }); rows.push({ type: 'subtotal', key: 'ebitda', label: 'EBITDA', kind: 'income' }); }
-      if (sec === 'interest') rows.push({ type: 'subtotal', key: 'interest', label: 'Total Interest & Bank Charges', kind: 'expense' });
+      if (sec === 'interest') {
+        rows.push({ type: 'subtotal', key: 'interest', label: 'Total Interest & Bank Charges', kind: 'expense' });
+        rows.push({ type: 'totalexp', key: 'totalexp', label: 'Total Expenses (Direct + Indirect + Bank Charges)', kind: 'expense' });
+      }
     });
     rows.push({ type: 'net', key: 'netprofit', label: 'Net Profit', kind: 'income' });
     rows.push({ type: 'ratio', key: 'netPct', label: 'Net Profit %' });
@@ -1477,6 +1521,16 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
   }, [lineItems]);
 
   if (monthKeys.length === 0) return <div className="empty-state">No months in the selected report range.</div>;
+
+  const showPeriodTotal = monthKeys.length > 1;
+  function periodTotal(row) {
+    let budget = 0, actual = 0;
+    monthKeys.forEach(p => {
+      if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget += num(md.budget); actual += num(md.actual); }
+      else { const c = computeMonth(p, monthlyData, lineItems); budget += c[row.key + '_budget']; actual += c[row.key + '_actual']; }
+    });
+    return { budget, actual };
+  }
 
   return (
     <div>
@@ -1518,12 +1572,28 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
                   </Fragment>
                 );
               })}
+              {showPeriodTotal && (
+                <Fragment>
+                  <th className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3' }}>Period Total Budget</th>
+                  <th className="num" style={{ background: '#EAF0F3' }}>Period Total Actual</th>
+                  <th className="num" style={{ background: '#EAF0F3' }}>Var %</th>
+                </Fragment>
+              )}
             </tr>
           </thead>
           <tbody>
             {allRows.map((row, idx) => {
-              if (row.type === 'section') return <tr key={idx} className="section-row"><td colSpan={1 + monthKeys.length * 3}>{row.label}</td></tr>;
-              const rowClass = row.type === 'net' ? 'net-row' : row.type === 'subtotal' ? 'subtotal-row' : row.type === 'ratio' ? 'subtotal-row' : '';
+              if (row.type === 'section') return <tr key={idx} className="section-row"><td colSpan={1 + monthKeys.length * 3 + (showPeriodTotal ? 3 : 0)}>{row.label}</td></tr>;
+              const rowClass = row.type === 'net' ? 'net-row' : row.type === 'totalexp' ? 'totalexp-row' : row.type === 'subtotal' ? 'subtotal-row' : row.type === 'ratio' ? 'subtotal-row' : '';
+              const pt = showPeriodTotal ? periodTotal(row) : null;
+              let ptBudget = pt ? pt.budget : 0, ptActual = pt ? pt.actual : 0;
+              if (row.type === 'ratio' && pt) {
+                const baseKey = row.key === 'grossPct' ? 'gross' : 'netprofit';
+                const incTotal = periodTotal({ type: 'subtotal', key: 'income' });
+                const baseTotal = periodTotal({ type: 'subtotal', key: baseKey });
+                ptBudget = incTotal.budget ? baseTotal.budget / incTotal.budget : 0;
+                ptActual = incTotal.actual ? baseTotal.actual / incTotal.actual : 0;
+              }
               return (
                 <tr key={idx} className={rowClass}>
                   <td>{row.label}</td>
@@ -1551,6 +1621,19 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
                       </Fragment>
                     );
                   })}
+                  {showPeriodTotal && (row.type === 'ratio' ? (
+                    <Fragment>
+                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700 }}>{pctStr(ptBudget)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{pctStr(ptActual)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}><span className={`badge ${ptActual >= ptBudget ? 'pos' : 'neg'}`}>{((ptActual - ptBudget) >= 0 ? '+' : '') + ((ptActual - ptBudget) * 100).toFixed(1) + 'pt'}</span></td>
+                    </Fragment>
+                  ) : (
+                    <Fragment>
+                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700 }}>{fmt(ptBudget, currency)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{fmt(ptActual, currency)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{(() => { const v = rowVariance(ptBudget, ptActual, row.kind); return <span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span>; })()}</td>
+                    </Fragment>
+                  ))}
                 </tr>
               );
             })}
@@ -1742,28 +1825,33 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
 /* ---------------- Model Comparison & ROI ---------------- */
 
 function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency }) {
+  const [groupBy, setGroupBy] = useState('model'); // 'model' | 'category'
+
   const unitStats = useMemo(() => vehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }))
     .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife]);
+
+  const groupKeyFor = (v) => groupBy === 'category' ? ((v.category && v.category.trim()) || 'Uncategorized') : v.name;
 
   const modelGroups = useMemo(() => {
     const groups = {};
     unitStats.forEach(({ vehicle, stats }) => {
-      if (!groups[vehicle.name]) groups[vehicle.name] = { name: vehicle.name, units: 0, totalPurchaseValue: 0, totalIncome: 0, sumAvgMonthly: 0, sumRequired: 0, withBenchmark: 0 };
-      const g = groups[vehicle.name];
+      const key = groupKeyFor(vehicle);
+      if (!groups[key]) groups[key] = { name: key, units: 0, totalPurchaseValue: 0, totalIncome: 0, sumAvgMonthly: 0, sumRequired: 0, withBenchmark: 0, color: vehicle.color || null };
+      const g = groups[key];
       g.units++;
       g.totalPurchaseValue += num(vehicle.purchaseValue);
       g.totalIncome += stats.total;
       g.sumAvgMonthly += stats.avgMonthly;
       if (stats.required > 0) { g.sumRequired += stats.required; g.withBenchmark++; }
     });
-    return Object.values(groups).map(g => {
+    return Object.values(groups).map((g, i) => {
       const avgMonthlyPerUnit = g.units ? g.sumAvgMonthly / g.units : 0;
       const avgRequiredPerUnit = g.withBenchmark ? g.sumRequired / g.withBenchmark : 0;
       const coverage = avgRequiredPerUnit > 0 ? avgMonthlyPerUnit / avgRequiredPerUnit : null;
       const verdict = coverage === null ? 'No Benchmark' : coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
-      return { ...g, avgMonthlyPerUnit, avgRequiredPerUnit, coverage, verdict };
+      return { ...g, avgMonthlyPerUnit, avgRequiredPerUnit, coverage, verdict, chartColor: g.color || COLORS[i % COLORS.length] };
     }).sort((a, b) => (b.coverage ?? -1) - (a.coverage ?? -1));
-  }, [unitStats]);
+  }, [unitStats, groupBy]);
 
   const verdictColor = (v) => v === 'Good' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Underperforming' ? '#C1503F' : '#6B7380';
 
@@ -1784,18 +1872,27 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
       </div>
 
       <div className="panel">
-        <h3>Avg Monthly Income vs Required — by Model</h3>
+        <h3>Compare By</h3>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${groupBy === 'model' ? 'selected' : ''}`} onClick={() => setGroupBy('model')}>Model</div>
+          <div className={`chip ${groupBy === 'category' ? 'selected' : ''}`} onClick={() => setGroupBy('category')}>Category</div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Avg Monthly Income vs Required — by {groupBy === 'category' ? 'Category' : 'Model'}</h3>
         <GroupedBarChart data={modelGroups.map(g => ({ label: g.name, avgMonthlyPerUnit: g.avgMonthlyPerUnit, avgRequiredPerUnit: g.avgRequiredPerUnit }))}
           series={[{ key: 'avgRequiredPerUnit', label: 'Required / Unit', color: '#D9C8B9' }, { key: 'avgMonthlyPerUnit', label: 'Actual / Unit', color: '#2D6E8E' }]} />
       </div>
 
       <div className="panel" style={{ overflowX: 'auto' }}>
-        <h3>Model-Level Summary</h3>
+        <h3>{groupBy === 'category' ? 'Category' : 'Model'}-Level Summary</h3>
         <table>
-          <thead><tr><th>Model</th><th className="num">Units</th><th className="num">Total Purchase Value</th><th className="num">Total Income (range)</th><th className="num">Avg Income / Unit / Month</th><th className="num">Required / Unit / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
+          <thead><tr><th></th><th>{groupBy === 'category' ? 'Category' : 'Model'}</th><th className="num">Units</th><th className="num">Total Purchase Value</th><th className="num">Total Income (range)</th><th className="num">Avg Income / Unit / Month</th><th className="num">Required / Unit / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
           <tbody>
             {modelGroups.map(g => (
               <tr key={g.name}>
+                <td><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: g.chartColor }} /></td>
                 <td>{g.name}</td>
                 <td className="num">{g.units}</td>
                 <td className="num">{fmt(g.totalPurchaseValue, currency)}</td>
@@ -1811,13 +1908,14 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
       </div>
 
       <div className="panel" style={{ overflowX: 'auto' }}>
-        <h3>Per-Vehicle Detail (grouped by model)</h3>
+        <h3>Per-Vehicle Detail (grouped by {groupBy === 'category' ? 'category' : 'model'})</h3>
         <table>
-          <thead><tr><th>Model</th><th>Plate</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th className="num">Avg Monthly Income</th><th className="num">Required / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
+          <thead><tr><th></th><th>Model</th><th>Plate</th><th>Category</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th className="num">Avg Monthly Income</th><th className="num">Required / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
           <tbody>
-            {unitStats.map(({ vehicle, stats }) => (
+            {unitStats.slice().sort((a, b) => groupKeyFor(a.vehicle).localeCompare(groupKeyFor(b.vehicle)) || a.vehicle.name.localeCompare(b.vehicle.name)).map(({ vehicle, stats }) => (
               <tr key={vehicle.id}>
-                <td>{vehicle.name}</td><td>{vehicle.plate}</td>
+                <td><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: vehicle.color || '#2D6E8E' }} /></td>
+                <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.category || '—'}</td>
                 <td className="num">{vehicle.purchaseValue ? fmt(vehicle.purchaseValue, currency) : '—'}</td>
                 <td className="num">{stats.usefulLife} yrs</td>
                 <td className="num">{fmt(stats.avgMonthly, currency)}</td>
@@ -2466,7 +2564,7 @@ function LoanScheduleReport({ loan, companyName, currency }) {
 /* ---------------- Vehicles ---------------- */
 
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
-  const [form, setForm] = useState({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' });
+  const [form, setForm] = useState({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' });
   const [bulkText, setBulkText] = useState('');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState(null);
@@ -2480,13 +2578,13 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
     } else {
       setVehicles([...vehicles, { id: uid('veh'), ...form }]);
     }
-    setForm({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' });
+    setForm({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' });
   }
-  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
+  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', color: v.color || '#2D6E8E', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', category: parts[2] || '', purchaseValue: parts[3] || '' }; });
+    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', category: parts[2] || '', purchaseValue: parts[3] || '', color: '#2D6E8E' }; });
     setVehicles([...vehicles, ...nv]); setBulkText('');
   }
   const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
@@ -2503,17 +2601,21 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
             <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
             <datalist id="category-presets">{CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}</datalist>
           </div>
+          <div className="field" style={{ flex: '0 0 70px' }}>
+            <label>Chart Color</label>
+            <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} style={{ width: '100%', height: 36, padding: 2, border: '1px solid var(--line)', borderRadius: 6 }} />
+          </div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={form.purchaseValue} onChange={e => setForm({ ...form, purchaseValue: e.target.value })} placeholder="50000" /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses default" /></div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button className="btn primary" onClick={addVehicle}>{editId ? 'Update Vehicle' : '+ Add Vehicle'}</button>
-          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', category: '', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
+          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
         </div>
       </div>
       <div className="panel">
         <h3>Bulk Add</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate, Category (optional), Purchase Value (optional)</code></p>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>One vehicle per line: <code>Name, Plate, Category (optional), Purchase Value (optional)</code> — chart color defaults to steel blue; edit individually to customize.</p>
         <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={5} style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }} placeholder={"Nissan Sunny, 9182-G, Economy Cars, 45000\nGMC Yukon, 9185-G, Luxury Cars, 120000"} />
         <button className="btn primary" style={{ marginTop: 10 }} onClick={bulkAdd}>+ Add All</button>
       </div>
@@ -2523,11 +2625,12 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
+          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th>Color</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
             {filtered.map(v => (
               <tr key={v.id}>
                 <td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
+                <td><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 4, background: v.color || '#2D6E8E', border: '1px solid var(--line)' }} /></td>
                 <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString('en-US') : '—'}</td>
                 <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : 'default'}</td>
                 <td style={{ textAlign: 'right' }}>
@@ -2946,12 +3049,16 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
             <thead><tr><th>Category</th><th className="num">Budget</th><th className="num">Actual</th><th>Variance</th></tr></thead>
             <tbody>
               <tr>
-                <td>Total Income</td><td className="num">{fmt(qr.totals.income_budget, currency)}</td><td className="num">{fmt(qr.totals.income_actual, currency)}</td>
+                <td>Total Revenue</td><td className="num">{fmt(qr.totals.income_budget, currency)}</td><td className="num">{fmt(qr.totals.income_actual, currency)}</td>
                 <td><span className={`badge ${qr.incomeVariance.favorable ? 'pos' : 'neg'}`}>{qr.incomeVariance.pct === null ? '—' : pctStr(qr.incomeVariance.pct)} {qr.incomeVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
               </tr>
-              <tr>
-                <td>Direct Expenses</td><td className="num">{fmt(qr.totals.direct_budget, currency)}</td><td className="num">{fmt(qr.totals.direct_actual, currency)}</td>
-                <td><span className={`badge ${qr.directVariance.favorable ? 'pos' : 'neg'}`}>{qr.directVariance.pct === null ? '—' : pctStr(qr.directVariance.pct)} {qr.directVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
+              <tr className="totalexp-row">
+                <td>Total Expenses (Direct+Indirect+Bank)</td><td className="num">{fmt(qr.totals.totalexp_budget, currency)}</td><td className="num">{fmt(qr.totals.totalexp_actual, currency)}</td>
+                {(() => { const v = rowVariance(qr.totals.totalexp_budget, qr.totals.totalexp_actual, 'expense'); return <td><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)} {v.favorable ? 'Favorable' : 'Deficit'}</span></td>; })()}
+              </tr>
+              <tr className="subtotal-row">
+                <td>Gross Profit</td><td className="num">{fmt(qr.totals.gross_budget, currency)}</td><td className="num">{fmt(qr.totals.gross_actual, currency)}</td>
+                {(() => { const v = rowVariance(qr.totals.gross_budget, qr.totals.gross_actual, 'income'); return <td><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)} {v.favorable ? 'Favorable' : 'Deficit'}</span></td>; })()}
               </tr>
               <tr className="net-row">
                 <td>Net Profit / Loss</td><td className="num">{fmt(qr.totals.netprofit_budget, currency)}</td><td className="num">{fmt(qr.totals.netprofit_actual, currency)}</td>
@@ -2970,6 +3077,16 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
           <DonutGauge pct={qr.fleetAvgOcc} color={qr.fleetAvgOcc >= 0.5 ? '#3E9C6E' : '#C1503F'} />
           <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>{qr.totalWithData} vehicles with logged data this period</p>
         </div>
+      </div>
+
+      <div className="panel">
+        <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
+        <GroupedBarChart data={[
+          { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
+          { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
+          { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
+          { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
+        ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
       </div>
 
       <div className="panel">
