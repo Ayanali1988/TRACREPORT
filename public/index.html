@@ -1842,7 +1842,7 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
                 <Fragment key={item.key}>
                 <tr>
                   <td style={{ textAlign: 'left' }}>
-                    <span onClick={() => setExpandedKeys({ ...expandedKeys, [item.key]: !isExpanded })} style={{ cursor: 'pointer', display: 'inline-block', width: 16, color: 'var(--steel)', fontWeight: 700 }}>{hasSubs || isExpanded ? (isExpanded ? '−' : '+') : ''}</span>
+                    <span onClick={() => setExpandedKeys({ ...expandedKeys, [item.key]: !isExpanded })} title={isExpanded ? 'Collapse' : 'Expand to add/manage sub-accounts'} style={{ cursor: 'pointer', display: 'inline-block', width: 16, color: 'var(--steel)', fontWeight: 700 }}>{isExpanded ? '−' : '+'}</span>
                     <input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)}
                       style={{ border: 'none', background: 'transparent', width: 'calc(100% - 20px)', font: 'inherit', fontWeight: 700, padding: 0, color: 'inherit', textAlign: 'left' }} />
                   </td>
