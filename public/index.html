@@ -21,6 +21,8 @@
   .sidebar { width:200px; background:var(--navy); color:#fff; display:flex; flex-direction:column; padding:18px 12px; flex-shrink:0; }
   .brand { display:flex; align-items:center; gap:8px; font-family:'Oswald',sans-serif; font-size:18px; font-weight:700; padding:0 6px 16px 6px; border-bottom:1px solid rgba(255,255,255,0.12); margin-bottom:12px; }
   .navbtn { display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none; color:rgba(255,255,255,0.72); padding:9px 10px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; margin-bottom:2px; }
+  .nav-group-label { color:rgba(255,255,255,0.4); font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:14px 10px 4px; }
+  .nav-group-label:first-child { padding-top:4px; }
   .navbtn:hover { background:rgba(255,255,255,0.06); color:#fff; }
   .navbtn.active { background:var(--steel); color:#fff; }
   .sidebar-footer { margin-top:auto; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12); font-size:11px; color:rgba(255,255,255,0.5); }
@@ -71,6 +73,7 @@
   .num { font-family:'Roboto Mono',monospace; text-align:right; font-variant-numeric:tabular-nums; }
   td input { width:88px; border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; box-sizing:border-box; font-family:'Roboto Mono',monospace; text-align:right; }
   .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; border-radius:20px; font-size:11px; font-weight:600; }
+  @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.45; } }
   .badge.pos { background:rgba(62,156,110,0.12); color:var(--green); }
   .badge.neg { background:rgba(193,80,63,0.12); color:var(--red); }
   .empty-state { text-align:center; padding:50px 20px; color:var(--muted); }
@@ -95,11 +98,13 @@
   .login-box { background:#fff; border-radius:12px; padding:34px; width:340px; text-align:center; }
   .login-box input { width:100%; border:1px solid var(--line); border-radius:7px; padding:10px 12px; font-size:14px; margin:14px 0; box-sizing:border-box; }
   .print-only { display:none; }
-  @page { size: landscape; margin: 10mm; }
+  @page { size: A4 landscape; margin: 10mm; }
   @media print {
     .no-print { display:none !important; }
+    .main-scroll { display:none !important; }
     .print-only { display:block !important; }
-    body { background:#fff; }
+    body { background:#fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; color-adjust: exact; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
     .app { display:block; }
     .print-only table { border-collapse: collapse; width: 100%; font-size: 10.5px; }
     .print-only table th, .print-only table td { border: 1px solid #ccc !important; padding: 3px 6px !important; line-height: 1.2; }
@@ -163,6 +168,19 @@ const defaultLineItems = () => ({
   ],
 });
 
+// Role-based tab access, enforced in the sidebar and as a safety fallback on login/role change.
+// Admin sees everything; Manager loses Settings/Financing/Feasibility/Personal Finance;
+// Viewer loses every entry/setup screen and sees only report-style tabs.
+const ADMIN_ONLY_TABS = ['settings'];
+const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance'];
+const VIEWER_HIDDEN_TABS = [...ADMIN_ONLY_TABS, ...ADMIN_MANAGER_TABS, 'financing', 'feasibility'];
+function TAB_GROUPS_FOR_ROLE(role) {
+  const all = ['dashboard', 'quick-review', 'pnl-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
+  if (role === 'admin') return all;
+  if (role === 'manager') return all.filter(t => !ADMIN_ONLY_TABS.includes(t) && t !== 'financing' && t !== 'feasibility' && t !== 'personal-finance');
+  return all.filter(t => !VIEWER_HIDDEN_TABS.includes(t) && t !== 'personal-finance');
+}
+
 const SECTION_META = {
   revenue: { title: 'Revenue', kind: 'income' },
   direct: { title: 'Direct Expenses', kind: 'expense' },
@@ -173,8 +191,35 @@ const SECTION_META = {
 
 const COLORS = ['#2D6E8E', '#3E9C6E', '#D98E3F', '#8C6BB1', '#C1503F', '#4E5D78'];
 
+const CAR_COLOR_OPTIONS = ['Black', 'White', 'Pearl White', 'Silver', 'Grey', 'Charcoal', 'Blue', 'Navy Blue', 'Red', 'Maroon', 'Green', 'Gold', 'Bronze', 'Brown', 'Beige', 'Orange', 'Yellow', 'Purple'];
+const CAR_COLOR_HEX = {
+  'Black': '#1A1A1A', 'White': '#F5F5F5', 'Pearl White': '#F0F0EA', 'Silver': '#C0C0C0', 'Grey': '#808080',
+  'Charcoal': '#36454F', 'Blue': '#1E5AA8', 'Navy Blue': '#1B2A4A', 'Red': '#C1503F', 'Maroon': '#6B2737',
+  'Green': '#3E9C6E', 'Gold': '#D4AF37', 'Bronze': '#8C6239', 'Brown': '#6B4423', 'Beige': '#E8DCC4',
+  'Orange': '#D98E3F', 'Yellow': '#E8C547', 'Purple': '#7B4B94',
+};
+function carColorHex(name) { return CAR_COLOR_HEX[name] || '#9AA0A6'; }
+
 function uid(p) { return p + '_' + Math.random().toString(36).slice(2, 9); }
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
+function todayStr() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+
+// Allows typing a simple arithmetic expression (e.g. "6500+2522") directly into a number
+// cell; evaluated on blur. Restricted to digits/operators/parens only — never passed to
+// eval() on unsanitized input, and rejected outright if it contains anything else.
+function evalExpr(str) {
+  if (typeof str !== 'string') return null;
+  const trimmed = str.trim();
+  if (!trimmed) return null;
+  if (!/^[0-9+\-*/().\s]+$/.test(trimmed)) return null;
+  if (!/[+\-*/]/.test(trimmed)) return null;
+  try {
+    const result = Function('"use strict"; return (' + trimmed + ')')();
+    return typeof result === 'number' && isFinite(result) ? result : null;
+  } catch (e) {
+    return null;
+  }
+}
 function monthsOf(year) { return Array.from({ length: 12 }, (_, i) => year + '-' + String(i + 1).padStart(2, '0')); }
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
@@ -189,6 +234,93 @@ function periodsBetween(from, to) {
   }
   return result;
 }
+
+// Sums the monthly-allocated cost of every insurance policy active during `period` (a
+// policy's premium is split evenly across the whole months it covers).
+function insuranceMonthlyTotal(period, insurancePolicies) {
+  let total = 0;
+  (insurancePolicies || []).forEach(p => {
+    if (!p.startDate || !p.endDate) return;
+    const months = periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7));
+    if (!months.includes(period)) return;
+    total += num(p.premiumAmount) / (months.length || 1);
+  });
+  return total;
+}
+
+// ---------------- Agreement-based Occupancy/Income system ----------------
+
+function findVehicleByPlate(vehicles, plate) {
+  const norm = (plate || '').trim().toLowerCase();
+  return vehicles.find(v => (v.plate || '').trim().toLowerCase() === norm);
+}
+
+function agreementEffectiveEnd(agreement) {
+  if (agreement.status === 'closed' && agreement.closeDate) return agreement.closeDate;
+  return todayStr(); // still open: provisional, counted through today
+}
+
+function agreementTotalDays(agreement) {
+  if (agreement.daysOverride !== undefined && agreement.daysOverride !== '') return num(agreement.daysOverride);
+  if (!agreement.startDate) return 0;
+  const start = new Date(agreement.startDate);
+  const end = new Date(agreementEffectiveEnd(agreement));
+  const days = Math.round((end - start) / 86400000) + 1;
+  return Math.max(0, days);
+}
+
+function agreementDailyRate(agreement) {
+  return agreement.type === 'monthly' ? num(agreement.rate) / 30 : num(agreement.rate);
+}
+
+function agreementTotalRevenue(agreement) {
+  if (agreement.revenueOverride !== undefined && agreement.revenueOverride !== '') return num(agreement.revenueOverride);
+  return agreementTotalDays(agreement) * agreementDailyRate(agreement);
+}
+
+function agreementDaysInMonth(agreement, period) {
+  if (!agreement.startDate) return 0;
+  const [y, m] = period.split('-').map(Number);
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0);
+  const start = new Date(agreement.startDate);
+  const end = new Date(agreementEffectiveEnd(agreement));
+  const rangeStart = start > monthStart ? start : monthStart;
+  const rangeEnd = end < monthEnd ? end : monthEnd;
+  if (rangeEnd < rangeStart) return 0;
+  return Math.round((rangeEnd - rangeStart) / 86400000) + 1;
+}
+
+function agreementMonthsSpanned(agreement) {
+  if (!agreement.startDate) return [];
+  const endStr = agreementEffectiveEnd(agreement);
+  if (agreement.startDate.slice(0, 7) > endStr.slice(0, 7)) return [];
+  return periodsBetween(agreement.startDate.slice(0, 7), endStr.slice(0, 7));
+}
+
+// Aggregates all agreements into { [period]: { [vehicleId]: { days, revenue } } } — only for
+// agreements matched to a fleet vehicle (Sub-Lease/unmatched plates are excluded from the
+// owned-fleet occupancy/revenue totals, tracked separately instead).
+function aggregateAgreements(agreements, vehicles) {
+  const out = {};
+  (agreements || []).forEach(a => {
+    const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
+    if (!vehicle) return; // Sub-Lease / unmatched — excluded from fleet totals
+    const totalDays = agreementTotalDays(a);
+    const totalRevenue = agreementTotalRevenue(a);
+    agreementMonthsSpanned(a).forEach(period => {
+      const monthDays = agreementDaysInMonth(a, period);
+      if (monthDays <= 0) return;
+      const monthRevenue = totalDays > 0 ? totalRevenue * (monthDays / totalDays) : 0;
+      out[period] = out[period] || {};
+      out[period][vehicle.id] = out[period][vehicle.id] || { days: 0, revenue: 0 };
+      out[period][vehicle.id].days += monthDays;
+      out[period][vehicle.id].revenue += monthRevenue;
+    });
+  });
+  return out;
+}
+
 function monthLabel(period) {
   const [y, m] = period.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleString('default', { month: 'short' }) + '-' + String(y).slice(2);
@@ -200,10 +332,19 @@ function fmt(n, currency) {
 }
 function pctStr(n) { return isFinite(n) ? (n * 100).toFixed(1) + '%' : '—'; }
 
-function computeMonth(period, monthlyData, lineItems) {
+// Any line item can have sub-accounts (e.g. "Utility Expense" -> Electricity/Water/Internet).
+// When it does, its own Budget/Actual is always the sum of its sub-accounts, not a stored
+// value of its own — this is the single point that enforces that everywhere.
+function itemFieldValue(item, monthlyData, period, field) {
   const md = monthlyData[period] || {};
-  const val = (key, field) => num((md[key] || {})[field]);
-  const sumSec = (arr, field) => arr.reduce((s, i) => s + val(i.key, field), 0);
+  if (item.subAccounts && item.subAccounts.length) {
+    return item.subAccounts.reduce((s, sub) => s + num((md[sub.key] || {})[field]), 0);
+  }
+  return num((md[item.key] || {})[field]);
+}
+
+function computeMonth(period, monthlyData, lineItems) {
+  const sumSec = (arr, field) => arr.reduce((s, item) => s + itemFieldValue(item, monthlyData, period, field), 0);
   const res = {};
   ['budget', 'actual'].forEach(f => {
     res['income_' + f] = sumSec(lineItems.revenue, f);
@@ -250,10 +391,7 @@ function buildPnlDetailRows(rangeMonths, lineItems, monthlyData) {
   const detailRows = [detailHeader];
   const pushSection = (sec, subtotalLabel, subtotalKey) => {
     lineItems[sec].forEach(item => {
-      detailRows.push([item.label, ...rangeMonths.flatMap(p => {
-        const md = (monthlyData[p] || {})[item.key] || {};
-        return [num(md.budget), num(md.actual)];
-      })]);
+      detailRows.push([item.label, ...rangeMonths.flatMap(p => [itemFieldValue(item, monthlyData, p, 'budget'), itemFieldValue(item, monthlyData, p, 'actual')])]);
     });
     if (subtotalLabel) detailRows.push([subtotalLabel, ...rangeMonths.flatMap(p => { const c = computeMonth(p, monthlyData, lineItems); return [c[subtotalKey + '_budget'], c[subtotalKey + '_actual']]; })]);
   };
@@ -394,6 +532,18 @@ function vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) {
   let verdict = 'No Benchmark';
   if (coverage !== null) verdict = coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
   return { total, monthsWithData, avgMonthly, required, coverage, verdict, usefulLife: vehicleUsefulLife(v, defaultUsefulLife) };
+}
+
+function vehicleLifetimeStats(v, vehicleRevenue) {
+  const purchaseMonth = v.purchaseDate ? v.purchaseDate.slice(0, 7) : null;
+  if (!purchaseMonth) return { monthsElapsed: 0, totalIncome: 0 };
+  const today = new Date();
+  const todayMonth = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+  const cutoffMonth = v.saleDate ? v.saleDate.slice(0, 7) : todayMonth;
+  const months = purchaseMonth <= cutoffMonth ? periodsBetween(purchaseMonth, cutoffMonth) : [];
+  let totalIncome = 0;
+  months.forEach(p => { totalIncome += num((vehicleRevenue[p] || {})[v.id]); });
+  return { monthsElapsed: months.length, totalIncome };
 }
 
 /* ---------------- Feasibility Study calculations ---------------- */
@@ -574,21 +724,82 @@ function confirmDelete(label, deletePin) {
 
 /* ---------------- small chart components (dependency-free) ---------------- */
 
+function fmtCompact(v) {
+  const n = Number(v) || 0;
+  const abs = Math.abs(n);
+  if (abs >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (abs >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return Math.round(n).toLocaleString('en-US');
+}
+
+function niceAxisMax(max) {
+  if (max <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(max)));
+  const normalized = max / magnitude;
+  let niceNormalized;
+  if (normalized <= 1) niceNormalized = 1;
+  else if (normalized <= 2) niceNormalized = 2;
+  else if (normalized <= 5) niceNormalized = 5;
+  else niceNormalized = 10;
+  return niceNormalized * magnitude;
+}
+
 function GroupedBarChart({ data, series, height = 200 }) {
-  const max = Math.max(1, ...data.flatMap(d => series.map(s => Math.abs(d[s.key]) || 0)));
+  const rawMax = Math.max(1, ...data.flatMap(d => series.map(s => Math.abs(d[s.key]) || 0)));
+  const niceMax = niceAxisMax(rawMax);
+  const gridLines = 4;
+  const barWidth = 18;
+  const barGap = 4;
+  const groupGap = 26;
+  const groupWidth = series.length * barWidth + (series.length - 1) * barGap;
+  const axisLeft = 52;
+  const axisBottom = 26;
+  const plotHeight = height;
+  const plotWidth = Math.max(240, data.length * (groupWidth + groupGap));
+  const totalWidth = axisLeft + plotWidth + 14;
+  const totalHeight = plotHeight + axisBottom + 14;
+
   return (
-    <div className="bar-chart" style={{ height: height + 40 }}>
-      {data.map((d, i) => (
-        <div className="bar-group" key={i}>
-          <div className="bar-set" style={{ height }}>
-            {series.map((s, j) => (
-              <div key={j} className="bar" title={s.label + ': ' + d[s.key]}
-                style={{ height: Math.max(2, Math.abs(d[s.key]) / max * height) + 'px', background: s.color }} />
-            ))}
-          </div>
-          <div className="bar-label">{d.label}</div>
-        </div>
-      ))}
+    <div style={{ overflowX: 'auto' }}>
+      <svg width={totalWidth} height={totalHeight} style={{ minWidth: totalWidth }}>
+        {Array.from({ length: gridLines + 1 }).map((_, gi) => {
+          const val = (niceMax / gridLines) * gi;
+          const y = plotHeight - (val / niceMax) * plotHeight + 8;
+          return (
+            <g key={gi}>
+              <line x1={axisLeft} y1={y} x2={totalWidth - 4} y2={y} stroke="#E2E4DE" strokeWidth="1" />
+              <text x={axisLeft - 8} y={y + 3.5} fontSize="10" fill="#6B7380" textAnchor="end">{fmtCompact(val)}</text>
+            </g>
+          );
+        })}
+        {data.map((d, i) => {
+          const groupX = axisLeft + i * (groupWidth + groupGap) + groupGap / 2;
+          return (
+            <g key={i}>
+              {series.map((s, j) => {
+                const v = Math.abs(d[s.key]) || 0;
+                const barH = v > 0 ? Math.max(1.5, (v / niceMax) * plotHeight) : 0;
+                const barX = groupX + j * (barWidth + barGap);
+                const barY = plotHeight - barH + 8;
+                return (
+                  <g key={j}>
+                    <rect x={barX} y={barY} width={barWidth} height={barH} fill={s.color} rx="2" />
+                    {v > 0 && <text x={barX + barWidth / 2} y={barY - 4} fontSize="8.5" fill="#4E5D78" textAnchor="middle">{fmtCompact(v)}</text>}
+                  </g>
+                );
+              })}
+              <text x={groupX + groupWidth / 2} y={plotHeight + 22} fontSize="10" fill="#6B7380" textAnchor="middle">{d.label}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4, fontSize: 11, color: 'var(--muted)' }}>
+        {series.map((s, i) => (
+          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: s.color }} /> {s.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -608,20 +819,41 @@ function HBarList({ data, maxVal }) {
   );
 }
 
-function LineTrendSVG({ data, series, width = 640, height = 220 }) {
+function LineTrendSVG({ data, series, width = 640, height = 240 }) {
   const allVals = data.flatMap(d => series.map(s => d[s.key] || 0));
-  const max = Math.max(...allVals, 0);
-  const min = Math.min(...allVals, 0);
+  const rawMax = Math.max(...allVals, 0);
+  const rawMin = Math.min(...allVals, 0);
+  const niceMax = niceAxisMax(Math.max(Math.abs(rawMax), Math.abs(rawMin), 1));
+  const max = rawMax >= 0 ? niceMax : 0;
+  const min = rawMin < 0 ? -niceMax : 0;
   const range = (max - min) || 1;
   const n = Math.max(data.length - 1, 1);
-  const toXY = (i, v) => [ (i / n) * (width - 40) + 30, height - 20 - ((v - min) / range) * (height - 40) ];
+  const axisLeft = 54;
+  const axisBottom = 26;
+  const plotW = width - axisLeft - 14;
+  const plotH = height - axisBottom - 10;
+  const toXY = (i, v) => [axisLeft + (i / n) * plotW, 10 + plotH - ((v - min) / range) * plotH];
+  const gridLines = 4;
   return (
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
-      <line x1="30" y1={height - 20} x2={width - 10} y2={height - 20} stroke="#E2E4DE" />
+      {Array.from({ length: gridLines + 1 }).map((_, gi) => {
+        const val = min + (range / gridLines) * gi;
+        const y = 10 + plotH - ((val - min) / range) * plotH;
+        return (
+          <g key={gi}>
+            <line x1={axisLeft} y1={y} x2={width - 6} y2={y} stroke="#E9EBE5" strokeWidth="1" />
+            <text x={axisLeft - 8} y={y + 3.5} fontSize="10" fill="#6B7380" textAnchor="end">{fmtCompact(val)}</text>
+          </g>
+        );
+      })}
       {series.map((s, si) => {
         const pts = data.map((d, i) => toXY(i, d[s.key] || 0).join(',')).join(' ');
-        return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth="2" strokeDasharray={s.dashed ? '5,4' : '0'} />;
+        return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth={s.dashed ? 2 : 3} strokeDasharray={s.dashed ? '5,4' : '0'} strokeLinejoin="round" strokeLinecap="round" />;
       })}
+      {!series.some(s => s.dashed) && data.map((d, i) => series.map((s, si) => {
+        const [x, y] = toXY(i, d[s.key] || 0);
+        return <circle key={si + '-' + i} cx={x} cy={y} r="3" fill={s.color} />;
+      }))}
       {data.map((d, i) => {
         const [x] = toXY(i, 0);
         return <text key={i} x={x} y={height - 4} fontSize="10" fill="#6B7380" textAnchor="middle">{d.label}</text>;
@@ -653,12 +885,37 @@ function App() {
   const [feasibilityStudies, setFeasibilityStudies] = useState([]);
   const [loans, setLoans] = useState([]);
   const [printLoanId, setPrintLoanId] = useState(null);
+  const [printFeasibilityId, setPrintFeasibilityId] = useState(null);
   const [printMode, setPrintMode] = useState('cumulative');
+  const [printMargin, setPrintMargin] = useState('10mm');
+
+  useEffect(() => {
+    let styleEl = document.getElementById('dynamic-print-margin');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'dynamic-print-margin';
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = `@page { size: A4 landscape; margin: ${printMargin}; }`;
+  }, [printMargin]);
   const [selectedLoanIds, setSelectedLoanIds] = useState([]); // empty = all loans included
+  const [selectedOccVehicleIds, setSelectedOccVehicleIds] = useState([]); // empty = all vehicles included
 
   const [reportFrom, setReportFrom] = useState(year + '-01');
   const [reportTo, setReportTo] = useState(year + '-12');
-  const [activeTab, setActiveTab] = useState('pnl-entry');
+  const [pnlEntryPeriod, setPnlEntryPeriod] = useState(year + '-01');
+  const [vehicleEntryPeriod, setVehicleEntryPeriod] = useState(year + '-01');
+  const [monthlyRemarks, setMonthlyRemarks] = useState({});
+  const [adminNotes, setAdminNotes] = useState([]);
+  const [insurancePolicies, setInsurancePolicies] = useState([]);
+  const [insuranceOverrides, setInsuranceOverrides] = useState({});
+  const [personalLoans, setPersonalLoans] = useState([]);
+  const [personalCards, setPersonalCards] = useState([]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [dashboardWidgets, setDashboardWidgets] = useState({ netProfit: true, totalRevenue: true, occupancy: true, topModels: true, budgetVsActual: true, alerts: true });
+  const [agreements, setAgreements] = useState([]);
+  const [agreementPeriod, setAgreementPeriod] = useState(year + '-01');
+  const [lastAgreementReview, setLastAgreementReview] = useState('');
   const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
   const [lastSaved, setLastSaved] = useState(null);
   const [showReauth, setShowReauth] = useState(false);
@@ -667,27 +924,38 @@ function App() {
   const [reauthPw, setReauthPw] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
   const [licenseError, setLicenseError] = useState('');
+  const [userName, setUserName] = useState('');
+  const [userPassword, setUserPassword] = useState('');
+  const [currentRole, setCurrentRole] = useState('admin');
+  const [users, setUsers] = useState([]);
 
-  async function apiCall(method, body, pwOverride, licOverride) {
+  async function apiCall(method, body, pwOverride, licOverride, userOverride) {
+    const u = userOverride !== undefined ? userOverride : { name: userName, password: userPassword };
     const res = await fetch('/api/data', {
       method,
       headers: {
         'content-type': 'application/json',
         'x-app-password': pwOverride !== undefined ? pwOverride : password,
         'x-license-key': licOverride !== undefined ? licOverride : licenseKey,
+        'x-user-name': u.name || '',
+        'x-user-password': u.password || '',
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 401) throw new Error('unauthorized');
-    if (res.status === 403) throw new Error('unlicensed');
+    if (res.status === 401) throw new Error(u.name ? 'invalid_user' : 'unauthorized');
+    if (res.status === 403) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error === 'read_only' ? 'read_only' : 'unlicensed');
+    }
     return res.json();
   }
 
   function currentFullState() {
-    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo };
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview };
   }
 
   async function performSave(pwOverride) {
+    if (currentRole === 'viewer') return;
     setSaveStatus('saving');
     try {
       await apiCall('POST', currentFullState(), pwOverride);
@@ -708,15 +976,22 @@ function App() {
     setReauthPw('');
   }
 
-  async function tryLogin(pw, lic) {
+  async function tryLogin(pw, lic, uName, uPw) {
     setAuthError('');
     setLicenseError('');
     try {
       const savedPw = pw;
       const savedLic = lic || '';
-      const res = await fetch('/api/data', { headers: { 'x-app-password': savedPw, 'x-license-key': savedLic } });
-      if (res.status === 401) { setAuthError('Incorrect password.'); return; }
+      const savedUserName = (uName || '').trim();
+      const savedUserPw = uPw || '';
+      const res = await fetch('/api/data', { headers: { 'x-app-password': savedPw, 'x-license-key': savedLic, 'x-user-name': savedUserName, 'x-user-password': savedUserPw } });
+      if (res.status === 401) {
+        const j = await res.json().catch(() => ({}));
+        setAuthError(j.error === 'invalid_user' ? 'Incorrect name or password for that user.' : 'Incorrect password.');
+        return;
+      }
       if (res.status === 403) { setLicenseError('Invalid or missing license key. Contact Sajid Ali (the developer) for a valid key.'); return; }
+      const resolvedRole = res.headers.get('x-resolved-role') || 'admin';
       const data = await res.json();
       if (data) {
         if (data.companyName) setCompanyName(data.companyName);
@@ -735,13 +1010,34 @@ function App() {
         if (data.loans) setLoans(data.loans);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
+        if (data.pnlEntryPeriod) setPnlEntryPeriod(data.pnlEntryPeriod);
+        if (data.vehicleEntryPeriod) setVehicleEntryPeriod(data.vehicleEntryPeriod);
+        if (data.monthlyRemarks) setMonthlyRemarks(data.monthlyRemarks);
+        if (data.users) setUsers(data.users);
+        if (data.adminNotes) setAdminNotes(data.adminNotes);
+        if (data.insurancePolicies) setInsurancePolicies(data.insurancePolicies);
+        if (data.insuranceOverrides) setInsuranceOverrides(data.insuranceOverrides);
+        if (data.personalLoans) setPersonalLoans(data.personalLoans);
+        if (data.personalCards) setPersonalCards(data.personalCards);
+        if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
+        if (data.agreements) setAgreements(data.agreements);
+        if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
+        if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
       }
       setPassword(savedPw);
       setLicenseKey(savedLic);
+      setUserName(savedUserName);
+      setUserPassword(savedUserPw);
+      setCurrentRole(resolvedRole);
       sessionStorage.setItem('fleet_app_pw', savedPw);
       sessionStorage.setItem('fleet_app_lic', savedLic);
+      sessionStorage.setItem('fleet_app_user_name', savedUserName);
+      sessionStorage.setItem('fleet_app_user_pw', savedUserPw);
       setAuthed(true);
       setLoaded(true);
+      if (!TAB_GROUPS_FOR_ROLE(resolvedRole).includes(activeTab)) {
+        setActiveTab('dashboard');
+      }
     } catch (e) {
       setAuthError('Could not reach the server. Check your connection and try again.');
     }
@@ -750,14 +1046,80 @@ function App() {
   useEffect(() => {
     const saved = sessionStorage.getItem('fleet_app_pw');
     const savedLic = sessionStorage.getItem('fleet_app_lic');
-    if (saved !== null) tryLogin(saved, savedLic || '');
+    const savedUserName = sessionStorage.getItem('fleet_app_user_name');
+    const savedUserPw = sessionStorage.getItem('fleet_app_user_pw');
+    if (saved !== null) tryLogin(saved, savedLic || '', savedUserName || '', savedUserPw || '');
+  }, []);
+
+  // Prevent the mouse scroll wheel from silently changing a focused number input's value —
+  // a real risk of accidental data changes when scrolling the page with the cursor over a cell.
+  useEffect(() => {
+    function handleWheel(e) {
+      if (document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement.type === 'number') {
+        document.activeElement.blur();
+      }
+    }
+    document.addEventListener('wheel', handleWheel, { passive: true });
+    return () => document.removeEventListener('wheel', handleWheel);
   }, []);
 
   useEffect(() => {
     if (!loaded || !authed) return;
     const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, loaded, authed]);
+
+  // Keep every month's insurance Actual figure in sync with the auto-calculated policy
+  // total (skipping any month the user has explicitly overridden) — runs across all
+  // months whenever policies change, not just whichever one P&L Entry happens to show,
+  // so every report/total reading monthlyData always sees the right number.
+  useEffect(() => {
+    if (!loaded) return;
+    const allPeriods = Object.keys(monthlyData);
+    insurancePolicies.forEach(p => {
+      if (p.startDate && p.endDate) periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7)).forEach(per => { if (!allPeriods.includes(per)) allPeriods.push(per); });
+    });
+    let changed = false;
+    const next = { ...monthlyData };
+    allPeriods.forEach(per => {
+      if (insuranceOverrides[per]) return;
+      const auto = insuranceMonthlyTotal(per, insurancePolicies);
+      const current = num((next[per] || {}).insuranceCharges && next[per].insuranceCharges.actual);
+      if (Math.abs(current - auto) < 0.005) return;
+      next[per] = { ...(next[per] || {}), insuranceCharges: { ...((next[per] || {}).insuranceCharges || {}), actual: auto } };
+      changed = true;
+    });
+    if (changed) setMonthlyData(next);
+  }, [insurancePolicies, insuranceOverrides, loaded]);
+
+  // Sync agreements into occupancy/vehicleRevenue: any vehicle+month with agreement data
+  // gets its occupancy days and income set from the agreements (the authoritative source
+  // going forward); periods with no agreement data keep whatever was already there
+  // (historical data entered the old way stays untouched).
+  useEffect(() => {
+    if (!loaded) return;
+    const agg = aggregateAgreements(agreements, vehicles);
+    let occChanged = false, revChanged = false;
+    const nextOcc = { ...occupancy };
+    const nextRev = { ...vehicleRevenue };
+    Object.keys(agg).forEach(period => {
+      Object.keys(agg[period]).forEach(vehicleId => {
+        const { days, revenue } = agg[period][vehicleId];
+        const roundedDays = Math.round(days);
+        const roundedRevenue = Math.round(revenue * 100) / 100;
+        if (num((nextOcc[period] || {})[vehicleId]) !== roundedDays) {
+          nextOcc[period] = { ...(nextOcc[period] || {}), [vehicleId]: roundedDays };
+          occChanged = true;
+        }
+        if (num((nextRev[period] || {})[vehicleId]) !== roundedRevenue) {
+          nextRev[period] = { ...(nextRev[period] || {}), [vehicleId]: roundedRevenue };
+          revChanged = true;
+        }
+      });
+    });
+    if (occChanged) setOccupancy(nextOcc);
+    if (revChanged) setVehicleRevenue(nextRev);
+  }, [agreements, vehicles, loaded]);
 
   // If the connection drops mid-session, a save fails and shows "Not saved" — once the
   // browser detects the connection is back, retry automatically instead of waiting for
@@ -775,6 +1137,8 @@ function App() {
   }, [loaded, authed, saveStatus]);
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
+  const overdueLoans = useMemo(() => loans.map(l => ({ loan: l, stats: loanStats(l) })).filter(x => x.stats.overdue), [loans]);
+  const [dismissedPaymentAlert, setDismissedPaymentAlert] = useState(false);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
   const financingReportLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
   function toggleLoanSelect(id) {
@@ -785,6 +1149,13 @@ function App() {
     });
   }
   function selectOnlyLoan(id) { setSelectedLoanIds([id]); }
+  function toggleOccVehicleSelect(id) {
+    setSelectedOccVehicleIds(prev => {
+      if (prev.length === 0) return [id];
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      return [...prev, id];
+    });
+  }
 
   function resetLineItemsToDefault() {
     if (!confirmDelete('all custom line items (revert to the default chart of accounts)', deletePin)) return;
@@ -854,6 +1225,19 @@ function App() {
         if (data.loans) setLoans(data.loans);
         if (data.reportFrom) setReportFrom(data.reportFrom);
         if (data.reportTo) setReportTo(data.reportTo);
+        if (data.pnlEntryPeriod) setPnlEntryPeriod(data.pnlEntryPeriod);
+        if (data.vehicleEntryPeriod) setVehicleEntryPeriod(data.vehicleEntryPeriod);
+        if (data.monthlyRemarks) setMonthlyRemarks(data.monthlyRemarks);
+        if (data.users) setUsers(data.users);
+        if (data.adminNotes) setAdminNotes(data.adminNotes);
+        if (data.insurancePolicies) setInsurancePolicies(data.insurancePolicies);
+        if (data.insuranceOverrides) setInsuranceOverrides(data.insuranceOverrides);
+        if (data.personalLoans) setPersonalLoans(data.personalLoans);
+        if (data.personalCards) setPersonalCards(data.personalCards);
+        if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
+        if (data.agreements) setAgreements(data.agreements);
+        if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
+        if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         window.alert('Backup restored successfully.');
       } catch (e) {
         window.alert('Could not read this file — make sure it is a backup .json file downloaded from this app.');
@@ -883,6 +1267,11 @@ function App() {
 
   function handlePrintLoan(loanId) {
     setPrintLoanId(loanId);
+    setTimeout(() => window.print(), 200);
+  }
+
+  function handlePrintFeasibilityStudy(studyId) {
+    setPrintFeasibilityId(studyId);
     setTimeout(() => window.print(), 200);
   }
 
@@ -993,15 +1382,24 @@ function App() {
         <div className="login-box">
           <h2 style={{ marginBottom: 6 }}>🚗 Fleet Financial Report</h2>
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>Enter the site password to continue</p>
-          <input type="password" placeholder="Password" value={password}
+          <input type="password" placeholder="Site Password" value={password}
             onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey); }} />
+            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey, userName, userPassword); }} />
           <input type="text" placeholder="License Key (if required)" value={licenseKey}
             onChange={e => setLicenseKey(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey); }} />
+            onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey, userName, userPassword); }} />
+          <div style={{ borderTop: '1px solid var(--line)', margin: '14px 0 10px', paddingTop: 10 }}>
+            <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '0 0 8px' }}>If you have a personal account (Admin/Manager/Viewer), sign in below. Leave blank to sign in as the primary Admin using just the site password.</p>
+            <input type="text" placeholder="Your Name (optional)" value={userName}
+              onChange={e => setUserName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey, userName, userPassword); }} />
+            <input type="password" placeholder="Your Password (if Name filled in)" value={userPassword}
+              onChange={e => setUserPassword(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') tryLogin(password, licenseKey, userName, userPassword); }} />
+          </div>
           {authError && <div style={{ color: 'var(--red)', fontSize: 12.5, marginBottom: 10 }}>{authError}</div>}
           {licenseError && <div style={{ color: 'var(--red)', fontSize: 12.5, marginBottom: 10 }}>{licenseError}</div>}
-          <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => tryLogin(password, licenseKey)}>Enter</button>
+          <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => tryLogin(password, licenseKey, userName, userPassword)}>Enter</button>
           <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 16, marginBottom: 0 }}>Designed &amp; developed by Sajid Ali</p>
         </div>
       </div>
@@ -1015,21 +1413,46 @@ function App() {
           {logoDataUrl ? <img src={logoDataUrl} alt="logo" style={{ height: 26, maxWidth: 150, objectFit: 'contain' }} /> : <>🚗 <span>{companyName || 'FleetIQ'}</span></>}
         </div>
         <nav onClick={() => setMobileNavOpen(false)}>
-          <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>
-          <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
-          <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
-          <button className={`navbtn ${activeTab === 'occ-entry' ? 'active' : ''}`} onClick={() => setActiveTab('occ-entry')}>⏱ Occupancy Entry</button>
-          <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
-          <button className={`navbtn ${activeTab === 'vehicles' ? 'active' : ''}`} onClick={() => setActiveTab('vehicles')}>🚙 Vehicles</button>
-          <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>
-          <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
-          <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>
-          <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>
-          <button className={`navbtn ${activeTab === 'chart-of-accounts' ? 'active' : ''}`} onClick={() => setActiveTab('chart-of-accounts')}>📑 Chart of Accounts</button>
-          <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>
-          <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>
+          {(() => {
+            const allowed = TAB_GROUPS_FOR_ROLE(currentRole);
+            const showDataEntryGroup = allowed.some(t => ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance'].includes(t));
+            const showAdminGroup = allowed.some(t => ['vehicles', 'chart-of-accounts', 'import', 'notes'].includes(t));
+            return (
+              <>
+                <button className={`navbtn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')} style={{ marginBottom: 8 }}>🏠 Dashboard</button>
+                <div className="nav-group-label">Reports</div>
+                <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
+                <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
+                <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
+                <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
+                {allowed.includes('financing') && <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>}
+                {allowed.includes('fleet-data-report') && <button className={`navbtn ${activeTab === 'fleet-data-report' ? 'active' : ''}`} onClick={() => setActiveTab('fleet-data-report')}>🗂 Fleet Data Report</button>}
+                {allowed.includes('investors-fleet') && <button className={`navbtn ${activeTab === 'investors-fleet' ? 'active' : ''}`} onClick={() => setActiveTab('investors-fleet')}>🤝 Investors Fleet</button>}
+
+                {showDataEntryGroup && <div className="nav-group-label">Data Entry</div>}
+                {allowed.includes('pnl-entry') && <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>}
+                {allowed.includes('occ-entry') && <button className={`navbtn ${activeTab === 'occ-entry' ? 'active' : ''}`} onClick={() => setActiveTab('occ-entry')}>⏱ Occupancy Entry</button>}
+                {allowed.includes('veh-revenue') && <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>}
+                {allowed.includes('agreements') && <button className={`navbtn ${activeTab === 'agreements' ? 'active' : ''}`} onClick={() => setActiveTab('agreements')}>📜 Agreements</button>}
+                {allowed.includes('feasibility') && <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>}
+                {allowed.includes('insurance') && <button className={`navbtn ${activeTab === 'insurance' ? 'active' : ''}`} onClick={() => setActiveTab('insurance')}>🛡 Insurance Policies</button>}
+
+                {showAdminGroup && <div className="nav-group-label">Administration</div>}
+                {allowed.includes('vehicles') && <button className={`navbtn ${activeTab === 'vehicles' ? 'active' : ''}`} onClick={() => setActiveTab('vehicles')}>🚙 Vehicles</button>}
+                {allowed.includes('chart-of-accounts') && <button className={`navbtn ${activeTab === 'chart-of-accounts' ? 'active' : ''}`} onClick={() => setActiveTab('chart-of-accounts')}>📑 Chart of Accounts</button>}
+                {allowed.includes('import') && <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>}
+                {allowed.includes('notes') && <button className={`navbtn ${activeTab === 'notes' ? 'active' : ''}`} onClick={() => setActiveTab('notes')}>📝 Notes</button>}
+
+                {allowed.includes('personal-finance') && <div className="nav-group-label">Personal (Admin Only)</div>}
+                {allowed.includes('personal-finance') && <button className={`navbtn ${activeTab === 'personal-finance' ? 'active' : ''}`} onClick={() => setActiveTab('personal-finance')}>💳 Personal Finance</button>}
+
+                {allowed.includes('settings') && <div className="nav-group-label">&nbsp;</div>}
+                {allowed.includes('settings') && <button className={`navbtn ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>⚙ Settings</button>}
+              </>
+            );
+          })()}
         </nav>
-        <div className="sidebar-footer">Signed in · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); sessionStorage.removeItem('fleet_app_lic'); setAuthed(false); setPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span><br />Designed &amp; developed by Sajid Ali</div>
+        <div className="sidebar-footer">Signed in{userName ? ` as ${userName} (${currentRole})` : ' as Admin'} · <span onClick={() => { sessionStorage.removeItem('fleet_app_pw'); sessionStorage.removeItem('fleet_app_lic'); sessionStorage.removeItem('fleet_app_user_name'); sessionStorage.removeItem('fleet_app_user_pw'); setAuthed(false); setPassword(''); setUserName(''); setUserPassword(''); }} style={{ textDecoration: 'underline', cursor: 'pointer' }}>Sign out</span><br />Designed &amp; developed by Sajid Ali</div>
       </aside>
       <div className={`sidebar-overlay no-print ${mobileNavOpen ? 'show' : ''}`} onClick={() => setMobileNavOpen(false)} />
 
@@ -1050,6 +1473,11 @@ function App() {
             {saveStatus === 'error' && <span style={{ color: 'var(--red)' }}>● Not saved</span>}
           </div>
           <div className="actions">
+            <select value={printMargin} onChange={e => setPrintMargin(e.target.value)} title="Page margin for print/PDF export" style={{ padding: '5px 8px', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12.5 }}>
+              <option value="6mm">Narrow Margin</option>
+              <option value="10mm">Normal Margin</option>
+              <option value="16mm">Wide Margin</option>
+            </select>
             <button className="btn" onClick={exportExcel} title="Exports just the current section">📥 Export Excel</button>
             <button className="btn" onClick={handlePrint} title="Exports just the current section">🖨 Export PDF</button>
             <button className="btn" onClick={exportExcelCumulative} title="Quick Review + P&L + Occupancy + ROI + Feasibility + Financing, all in one workbook">📊 Cumulative Excel</button>
@@ -1064,6 +1492,30 @@ function App() {
           </div>
         )}
 
+        {overdueLoans.length > 0 && !dismissedPaymentAlert && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Payment Due</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {overdueLoans.length === 1
+                ? `${overdueLoans[0].loan.modelName || 'A loan'} has an installment overdue (due ${fullDateLabel(overdueLoans[0].stats.nextDue.dueDate)}).`
+                : `${overdueLoans.length} loans have overdue installments.`} Review and update the payment schedule.
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('financing')}>Go to Vehicle Financing</button>
+            <button className="btn small" onClick={() => setDismissedPaymentAlert(true)}>Dismiss</button>
+          </div>
+        )}
+
+        {agreements.some(a => a.status === 'open') && (!lastAgreementReview || (new Date() - new Date(lastAgreementReview)) / 86400000 >= 7) && (
+          <div className="no-print" style={{ background: '#FFF6E8', borderBottom: '1px solid var(--amber)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>⚠ Weekly Agreement Review</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {lastAgreementReview ? `It's been over a week since your last review (${lastAgreementReview}).` : "You haven't reviewed your Open Agreements yet."} Confirm which are still genuinely active before finalizing this month.
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('agreements')}>Review Open Agreements</button>
+            <button className="btn small" onClick={() => setLastAgreementReview(todayStr())}>Mark as Reviewed Today</button>
+          </div>
+        )}
+
         {showReauth && (
           <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Couldn't save — your password may have changed.</span>
@@ -1075,20 +1527,27 @@ function App() {
           </div>
         )}
 
-        <div className="main-scroll">
-          {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} />}
-          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+        <div className="main-scroll no-print">
+          {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} period={pnlEntryPeriod} setPeriod={setPnlEntryPeriod} monthlyRemarks={monthlyRemarks} setMonthlyRemarks={setMonthlyRemarks} insurancePolicies={insurancePolicies} insuranceOverrides={insuranceOverrides} setInsuranceOverrides={setInsuranceOverrides} />}
+          {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} />}
+          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />}
           {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
-          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} />}
           {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} currency={currency} />}
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
-          {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} />}
+          {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} onPrintStudy={handlePrintFeasibilityStudy} />}
           {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} onSelectOnlyLoan={selectOnlyLoan} />}
           {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
-          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} />}
+          {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
+          {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
+          {activeTab === 'investors-fleet' && <InvestorsFleetPanel vehicles={vehicles} vehicleRevenue={vehicleRevenue} rangeMonths={rangeMonths} currency={currency} />}
+          {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} users={users} setUsers={setUsers} />}
           {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
         </div>
       </div>
@@ -1096,6 +1555,8 @@ function App() {
       <div className="print-only">
         {printLoanId ? (
           <LoanScheduleReport loan={loans.find(l => l.id === printLoanId)} companyName={companyName} currency={currency} />
+        ) : printFeasibilityId ? (
+          <FeasibilityStudyDetailPrint study={feasibilityStudies.find(s => s.id === printFeasibilityId)} companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} />
         ) : printMode === 'quick-review' ? (
           <div style={{ padding: 24 }}>
             <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
@@ -1133,6 +1594,52 @@ function PrintHeader({ companyName, logoDataUrl, subtitle }) {
       {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, background: '#fff', borderRadius: 6, padding: 4, display: 'block' }} />}
       <h1 style={{ fontSize: 20, color: '#fff', margin: 0 }}>{companyName}</h1>
       <p style={{ color: 'rgba(255,255,255,0.8)', marginTop: 4 }}>{subtitle}</p>
+    </div>
+  );
+}
+
+function FeasibilityStudyDetailPrint({ study, currency, companyName, logoDataUrl }) {
+  if (!study) return <div style={{ padding: 24 }}>Study not found.</div>;
+  const c = computeFeasibility(study);
+  const verdictPhrase = c.requiredDailyRate
+    ? `To cover total costs and expenses of ${fmt(c.costBase, currency)} and achieve your target profit, this vehicle must generate ${fmt(c.grandTotal, currency)} over its useful life — a minimum daily rate of ${fmt(c.requiredDailyRate, currency)} is needed to hit that goal.`
+    : 'No Total Price/Useful Life set for this study.';
+  return (
+    <div style={{ padding: 24 }}>
+      <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Feasibility Study — ${study.name || '(unnamed)'}`} />
+      <table style={{ border: '1px solid #ccc', marginBottom: 14 }}>
+        <tbody>
+          <tr><td style={{ border: '1px solid #ccc' }}>Total Price</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(study.totalPrice, currency)}</td>
+              <td style={{ border: '1px solid #ccc' }}>Down Payment</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(study.downPayment, currency)}</td></tr>
+          <tr><td style={{ border: '1px solid #ccc' }}>Useful Life</td><td style={{ border: '1px solid #ccc' }} className="num">{study.usefulLifeYears || 1} yrs</td>
+              <td style={{ border: '1px solid #ccc' }}>Working Days/Month</td><td style={{ border: '1px solid #ccc' }} className="num">{study.workingDaysPerMonth || 22}</td></tr>
+        </tbody>
+      </table>
+      <table style={{ border: '1px solid #ccc', marginBottom: 14 }}>
+        <thead><tr>{['Cost Line', 'Annual Amount', 'Total over Life'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {(study.costLines || []).map(cl => (
+            <tr key={cl.id}><td style={{ border: '1px solid #ccc' }}>{cl.label}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(cl.annualAmount, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(num(cl.annualAmount) * (num(study.usefulLifeYears) || 1), currency)}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="kpi-row">
+        <div className="kpi-card"><div className="label">Total Cost + Expenses</div><div className="value mono">{fmt(c.costBase, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Grand Total (Required Revenue)</div><div className="value mono">{fmt(c.grandTotal, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Required Daily Rate</div><div className="value mono">{fmt(c.requiredDailyRate, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Market Daily Rate</div><div className="value mono">{study.marketDailyRate ? fmt(study.marketDailyRate, currency) : '—'}</div></div>
+      </div>
+      <table style={{ border: '1px solid #ccc', marginTop: 14 }}>
+        <thead><tr>{['Occupancy', 'Days/Month', 'Required Monthly Income', 'At Market Rate'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {c.scenarios.map((s, i) => (
+            <tr key={i}><td style={{ border: '1px solid #ccc' }}>{(s.occPct * 100).toFixed(0)}%</td><td style={{ border: '1px solid #ccc' }} className="num">{s.days}</td><td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.requiredAmount, currency)}</td><td style={{ border: '1px solid #ccc' }} className="num">{study.marketDailyRate ? fmt(s.marketAmount, currency) : '—'}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <table style={{ border: '1px solid #ccc', marginTop: 14 }}>
+        <tbody><tr><td style={{ border: '1px solid #ccc', padding: 10 }}><b>Verdict:</b> {verdictPhrase}</td></tr></tbody>
+      </table>
     </div>
   );
 }
@@ -1184,6 +1691,7 @@ function FinancingPrintReport({ loans, currency, companyName, logoDataUrl }) {
         <div className="kpi-card"><div className="label">Total Loan Amount (Payable)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
         <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(fleetTotals.totalPaid, currency)}</div></div>
         <div className="kpi-card"><div className="label">Total Balance</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Interest Remaining</div><div className="value mono">{fmt(fleetTotals.interestBalance, currency)}</div></div>
       </div>
 
       <div className="grid-2">
@@ -1198,7 +1706,7 @@ function FinancingPrintReport({ loans, currency, companyName, logoDataUrl }) {
       </div>
 
       <table style={{ border: '1px solid #ccc' }}>
-        <thead><tr>{['Vehicle', 'Loan Amount', 'Paid', 'Balance', '% Paid'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
+        <thead><tr>{['Vehicle', 'Loan Amount', 'Paid', 'Balance', 'Interest Balance', '% Paid'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
         <tbody>
           {loans.map(l => {
             const s = loanStats(l);
@@ -1208,22 +1716,42 @@ function FinancingPrintReport({ loans, currency, companyName, logoDataUrl }) {
                 <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.totalAmount, currency)}</td>
                 <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.paidAmount, currency)}</td>
                 <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balanceAmount, currency)}</td>
+                <td style={{ border: '1px solid #ccc' }} className="num">{fmt(s.balanceInterest, currency)}</td>
                 <td style={{ border: '1px solid #ccc' }} className="num">{pctStr(s.paidPct)}</td>
               </tr>
             );
           })}
-          {loans.length === 0 && <tr><td colSpan={5} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No loans added yet.</td></tr>}
+          {loans.length === 0 && <tr><td colSpan={6} style={{ border: '1px solid #ccc', textAlign: 'center', color: 'var(--muted)' }}>No loans added yet.</td></tr>}
         </tbody>
       </table>
     </div>
   );
 }
 
-function KpiCard({ label, value, sub, diff }) {
+function MonthNavigator({ period, setPeriod }) {
+  function shift(delta) {
+    const [y, m] = period.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setPeriod(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '6px 0' }}>
+      <button className="btn" onClick={() => shift(-1)} title="Previous month">◀ Back</button>
+      <div style={{ textAlign: 'center', minWidth: 160 }}>
+        <div style={{ fontSize: 21, fontWeight: 700, color: 'var(--navy)', letterSpacing: '0.01em' }}>{monthLabel(period)}</div>
+        <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ marginTop: 4 }} />
+      </div>
+      <button className="btn" onClick={() => shift(1)} title="Next month">Next ▶</button>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, sub, diff, rawValue, signColor }) {
+  const valueStyle = signColor ? { fontWeight: 700, color: rawValue >= 0 ? '#1E5AA8' : '#C1503F' } : undefined;
   return (
     <div className="kpi-card">
       <div className="label">{label}</div>
-      <div className="value mono">{value}</div>
+      <div className="value mono" style={valueStyle}>{value}</div>
       <div className={`sub ${diff >= 0 ? 'pos' : 'neg'}`}>{diff >= 0 ? '▲' : '▼'} {sub}</div>
     </div>
   );
@@ -1235,6 +1763,8 @@ function KpiCard({ label, value, sub, diff }) {
 
 function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
   const [newItemText, setNewItemText] = useState({});
+  const [expandedKeys, setExpandedKeys] = useState({});
+  const [newSubText, setNewSubText] = useState({});
 
   function addItem(sectionKey) {
     const label = (newItemText[sectionKey] || '').trim();
@@ -1258,6 +1788,35 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
       return { ...prev, [sectionKey]: arr };
     });
   }
+  function addSubAccount(sectionKey, parentKey) {
+    const label = (newSubText[parentKey] || '').trim();
+    if (!label) return;
+    setLineItems(prev => ({
+      ...prev,
+      [sectionKey]: prev[sectionKey].map(it => it.key === parentKey
+        ? { ...it, subAccounts: [...(it.subAccounts || []), { key: uid('sub'), label }] }
+        : it),
+    }));
+    setNewSubText({ ...newSubText, [parentKey]: '' });
+    setExpandedKeys({ ...expandedKeys, [parentKey]: true });
+  }
+  function renameSubAccount(sectionKey, parentKey, subKey, newLabel) {
+    setLineItems(prev => ({
+      ...prev,
+      [sectionKey]: prev[sectionKey].map(it => it.key === parentKey
+        ? { ...it, subAccounts: (it.subAccounts || []).map(s => s.key === subKey ? { ...s, label: newLabel } : s) }
+        : it),
+    }));
+  }
+  function removeSubAccount(sectionKey, parentKey, subKey, label) {
+    if (!confirmDelete(label, deletePin)) return;
+    setLineItems(prev => ({
+      ...prev,
+      [sectionKey]: prev[sectionKey].map(it => it.key === parentKey
+        ? { ...it, subAccounts: (it.subAccounts || []).filter(s => s.key !== subKey) }
+        : it),
+    }));
+  }
 
   const totalItems = Object.values(lineItems).reduce((s, arr) => s + arr.length, 0);
 
@@ -1266,7 +1825,7 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
       <div className="panel">
         <h3>Chart of Accounts</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
-          The full list of accounts used across every P&amp;L report — {totalItems} items across 5 sections. Add, rename, reorder, or remove accounts here without monthly figures cluttering the view. Changes apply everywhere: P&amp;L Entry, Compare, and exports.
+          The full list of accounts used across every P&amp;L report — {totalItems} items across 5 sections. Add, rename, reorder, or remove accounts here without monthly figures cluttering the view. Changes apply everywhere: P&amp;L Entry, Compare, and exports. Any account can have sub-accounts (e.g. "Utility Expense" → Electricity/Water/Internet) — expand with the + to add or manage them; reports always show only the parent line.
         </p>
       </div>
 
@@ -1276,11 +1835,16 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
           <table>
             <thead><tr><th style={{ textAlign: 'left' }}>Account Name</th><th></th></tr></thead>
             <tbody>
-              {lineItems[sectionKey].map((item, idx) => (
-                <tr key={item.key}>
+              {lineItems[sectionKey].map((item, idx) => {
+                const hasSubs = item.subAccounts && item.subAccounts.length > 0;
+                const isExpanded = !!expandedKeys[item.key];
+                return (
+                <Fragment key={item.key}>
+                <tr>
                   <td style={{ textAlign: 'left' }}>
+                    <span onClick={() => setExpandedKeys({ ...expandedKeys, [item.key]: !isExpanded })} style={{ cursor: 'pointer', display: 'inline-block', width: 16, color: 'var(--steel)', fontWeight: 700 }}>{hasSubs || isExpanded ? (isExpanded ? '−' : '+') : ''}</span>
                     <input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)}
-                      style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit', textAlign: 'left' }} />
+                      style={{ border: 'none', background: 'transparent', width: 'calc(100% - 20px)', font: 'inherit', fontWeight: 700, padding: 0, color: 'inherit', textAlign: 'left' }} />
                   </td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="icon-btn" disabled={idx === 0} onClick={() => moveItem(sectionKey, idx, -1)} title="Move up">↑</button>{' '}
@@ -1288,7 +1852,32 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
                     <button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)} title="Delete">✕</button>
                   </td>
                 </tr>
-              ))}
+                {isExpanded && (
+                  <>
+                    {(item.subAccounts || []).map(sub => (
+                      <tr key={sub.key} style={{ background: '#FAFAF8' }}>
+                        <td style={{ textAlign: 'left', paddingLeft: 30 }}>
+                          <input value={sub.label} onChange={e => renameSubAccount(sectionKey, item.key, sub.key, e.target.value)}
+                            style={{ border: 'none', background: 'transparent', width: '100%', fontSize: 12.5, color: 'var(--muted)', padding: 0, textAlign: 'left' }} />
+                        </td>
+                        <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={() => removeSubAccount(sectionKey, item.key, sub.key, sub.label)}>✕</button></td>
+                      </tr>
+                    ))}
+                    <tr style={{ background: '#FAFAF8' }}>
+                      <td colSpan={2} style={{ paddingLeft: 30 }}>
+                        <div className="add-row">
+                          <input placeholder="Add sub-account…" value={newSubText[item.key] || ''}
+                            onChange={e => setNewSubText({ ...newSubText, [item.key]: e.target.value })}
+                            onKeyDown={e => { if (e.key === 'Enter') addSubAccount(sectionKey, item.key); }} />
+                          <button className="btn small" onClick={() => addSubAccount(sectionKey, item.key)}>+ Add Sub-Account</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </>
+                )}
+                </Fragment>
+                );
+              })}
               {lineItems[sectionKey].length === 0 && <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No accounts in this section yet.</td></tr>}
             </tbody>
           </table>
@@ -1304,8 +1893,7 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
   );
 }
 
-function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin }) {
-  const [period, setPeriod] = useState(monthKeys[0]);
+function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin, period, setPeriod, monthlyRemarks, setMonthlyRemarks, insurancePolicies, insuranceOverrides, setInsuranceOverrides }) {
   const [newItemText, setNewItemText] = useState({});
   const [bulkItemKey, setBulkItemKey] = useState('');
   const [bulkFrom, setBulkFrom] = useState(monthKeys[0]);
@@ -1313,6 +1901,17 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
   const [bulkField, setBulkField] = useState('budget');
   const [bulkMode, setBulkMode] = useState('flat');
   const [bulkAmount, setBulkAmount] = useState('');
+  const [bulkSuccess, setBulkSuccess] = useState(false);
+
+
+  function resetThisPage() {
+    if (!confirmDelete(`ALL Budget and Actual entries for ${monthLabel(period)} on this page`, deletePin)) return;
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      delete next[period];
+      return next;
+    });
+  }
 
   function setCell(itemKey, field, value) {
     setMonthlyData(prev => {
@@ -1349,6 +1948,9 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
       });
       return next;
     });
+    setBulkAmount('');
+    setBulkSuccess(true);
+    setTimeout(() => setBulkSuccess(false), 2500);
   }
 
   function clearBulkRange() {
@@ -1375,21 +1977,90 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
     interest: { key: 'interest', label: 'Total Interest & Bank Charges' },
   };
 
+  function handleCellKeyDown(e, sectionKey, idx, field) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const items = lineItems[sectionKey];
+    if (idx < items.length - 1) {
+      const next = document.getElementById(`cell-${sectionKey}-${idx + 1}-${field}`);
+      if (next) next.focus();
+    }
+  }
+  function commitCellExpr(itemKey, field, rawValue) {
+    const evaluated = evalExpr(rawValue);
+    if (evaluated !== null) setCell(itemKey, field, evaluated);
+  }
+  const [expandedItems, setExpandedItems] = useState({});
+
   const renderSection = (sectionKey) => (
     <div className="panel" key={sectionKey} style={sectionKey === 'belowLine' ? { border: '1px solid var(--green)', background: 'rgba(62,156,110,0.04)' } : undefined}>
       <h3 style={{ textAlign: 'left', color: sectionKey === 'belowLine' ? 'var(--green)' : undefined }}>{sectionKey === 'belowLine' ? '+ ' : ''}{SECTION_META[sectionKey].title}</h3>
       <table>
-        <thead><tr><th style={{ textAlign: 'left' }}>Line Item</th><th className="num">Budget ({currency})</th><th className="num">Actual ({currency})</th><th></th></tr></thead>
+        <thead><tr><th style={{ textAlign: 'left' }}>Line Item</th><th className="num">Budget</th><th className="num">Actual</th><th style={{ textAlign: 'left' }}>Notes</th></tr></thead>
         <tbody>
-          {lineItems[sectionKey].map(item => {
+          {lineItems[sectionKey].map((item, idx) => {
             const cellVal = (monthlyData[period] || {})[item.key] || {};
+            const isInsuranceRow = item.key === 'insuranceCharges';
+            const insuranceAuto = isInsuranceRow ? insuranceMonthlyTotal(period, insurancePolicies) : null;
+            const isOverridden = isInsuranceRow && insuranceOverrides[period];
+            const hasSubs = item.subAccounts && item.subAccounts.length > 0;
+            const isExpanded = !!expandedItems[item.key];
             return (
-              <tr key={item.key}>
-                <td style={{ textAlign: 'left' }}><input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)} style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'inherit', textAlign: 'left' }} /></td>
-                <td className="num"><input type="number" value={cellVal.budget || ''} onChange={e => setCell(item.key, 'budget', e.target.value)} /></td>
-                <td className="num"><input type="number" value={cellVal.actual || ''} onChange={e => setCell(item.key, 'actual', e.target.value)} /></td>
-                <td><button className="icon-btn" onClick={() => removeItem(sectionKey, item.key, item.label)}>✕</button></td>
+              <Fragment key={item.key}>
+              <tr>
+                <td style={{ textAlign: 'left' }}>
+                  {hasSubs && <span onClick={() => setExpandedItems({ ...expandedItems, [item.key]: !isExpanded })} style={{ cursor: 'pointer', display: 'inline-block', width: 16, color: 'var(--steel)', fontWeight: 700 }}>{isExpanded ? '−' : '+'}</span>}
+                  <input value={item.label} onChange={e => renameItem(sectionKey, item.key, e.target.value)} tabIndex={-1} style={{ border: 'none', background: 'transparent', width: hasSubs ? 'calc(100% - 20px)' : '100%', font: 'inherit', fontWeight: hasSubs ? 700 : 400, padding: 0, color: 'inherit', textAlign: 'left' }} />
+                </td>
+                <td className="num">
+                  {hasSubs ? (
+                    <input disabled value={itemFieldValue(item, monthlyData, period, 'budget').toFixed(2)} style={{ background: '#F2F3F0', color: 'var(--muted)', textAlign: 'right', fontWeight: 700 }} title="Sum of sub-accounts" />
+                  ) : (
+                    <input id={`cell-${sectionKey}-${idx}-budget`} type="number" value={cellVal.budget || ''}
+                      onChange={e => setCell(item.key, 'budget', e.target.value)}
+                      onBlur={e => commitCellExpr(item.key, 'budget', e.target.value)}
+                      onKeyDown={e => handleCellKeyDown(e, sectionKey, idx, 'budget')} />
+                  )}
+                </td>
+                <td className="num">
+                  {hasSubs ? (
+                    <input disabled value={itemFieldValue(item, monthlyData, period, 'actual').toFixed(2)} style={{ background: '#F2F3F0', color: 'var(--muted)', textAlign: 'right', fontWeight: 700 }} title="Sum of sub-accounts" />
+                  ) : isInsuranceRow && !isOverridden ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                      <input disabled value={insuranceAuto ? insuranceAuto.toFixed(2) : '0.00'} style={{ background: '#F2F3F0', color: 'var(--muted)', textAlign: 'right' }} title="Auto-calculated from Insurance Policies" />
+                      <button className="icon-btn" title="Override this month" onClick={() => setInsuranceOverrides(prev => ({ ...prev, [period]: true }))}>✎</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input id={`cell-${sectionKey}-${idx}-actual`} type="number" value={cellVal.actual || ''}
+                        onChange={e => setCell(item.key, 'actual', e.target.value)}
+                        onBlur={e => commitCellExpr(item.key, 'actual', e.target.value)}
+                        onKeyDown={e => handleCellKeyDown(e, sectionKey, idx, 'actual')} />
+                      {isInsuranceRow && <button className="icon-btn" title="Back to auto" onClick={() => setInsuranceOverrides(prev => { const n = { ...prev }; delete n[period]; return n; })}>↺</button>}
+                    </div>
+                  )}
+                </td>
+                <td style={{ textAlign: 'left' }}>
+                  <input value={cellVal.notes || ''} onChange={e => setCell(item.key, 'notes', e.target.value)} tabIndex={-1} placeholder="—"
+                    style={{ border: 'none', background: 'transparent', width: '100%', font: 'inherit', padding: 0, color: 'var(--muted)', fontSize: 12.5, textAlign: 'left' }} />
+                </td>
               </tr>
+              {isExpanded && (item.subAccounts || []).map(sub => {
+                const subVal = (monthlyData[period] || {})[sub.key] || {};
+                return (
+                  <tr key={sub.key} style={{ background: '#FAFAF8' }}>
+                    <td style={{ textAlign: 'left', paddingLeft: 30, fontSize: 12.5, color: 'var(--muted)' }}>{sub.label}</td>
+                    <td className="num">
+                      <input type="number" value={subVal.budget || ''} onChange={e => setCell(sub.key, 'budget', e.target.value)} onBlur={e => commitCellExpr(sub.key, 'budget', e.target.value)} style={{ fontSize: 12.5 }} />
+                    </td>
+                    <td className="num">
+                      <input type="number" value={subVal.actual || ''} onChange={e => setCell(sub.key, 'actual', e.target.value)} onBlur={e => commitCellExpr(sub.key, 'actual', e.target.value)} style={{ fontSize: 12.5 }} />
+                    </td>
+                    <td></td>
+                  </tr>
+                );
+              })}
+              </Fragment>
             );
           })}
           {sectionSubtotal[sectionKey] && (
@@ -1414,9 +2085,10 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
   return (
     <div>
       <div className="panel">
-        <div className="field" style={{ maxWidth: 220 }}>
-          <label>Month (any year)</label>
-          <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
+        <MonthNavigator period={period} setPeriod={setPeriod} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Amounts in {currency}</span>
+          <button className="btn small" style={{ color: 'var(--red)', borderColor: 'var(--red)' }} onClick={resetThisPage}>Reset This Page</button>
         </div>
       </div>
 
@@ -1451,11 +2123,12 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
           </div>
           <div className="field"><label>{bulkMode === 'spread' ? 'Total Amount' : 'Amount / Month'} ({currency})</label><input type="number" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} /></div>
         </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn small" onClick={() => { setBulkFrom(monthKeys[0]); setBulkTo(monthKeys[monthKeys.length - 1]); }}>Full Year</button>
           <button className="btn small" onClick={() => { setBulkFrom(period); setBulkTo(period); }}>Just Current Month</button>
           <button className="btn primary" onClick={applyBulkBudget}>Apply</button>
           <button className="btn danger" onClick={clearBulkRange}>Clear This Range</button>
+          {bulkSuccess && <span style={{ color: 'var(--green)', fontSize: 12.5, fontWeight: 600 }}>✓ Entry successful</span>}
         </div>
       </div>
 
@@ -1487,7 +2160,15 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
         <KpiCard label="Total Expenses" value={fmt(c.totalexp_actual, currency)} sub={`Budget ${fmt(c.totalexp_budget, currency)}`} diff={c.totalexp_budget - c.totalexp_actual} />
         <KpiCard label="Gross Profit" value={fmt(c.gross_actual, currency)} sub={`Budget ${fmt(c.gross_budget, currency)}`} diff={c.gross_actual - c.gross_budget} />
         <KpiCard label="EBITDA" value={fmt(c.ebitda_actual, currency)} sub={`Budget ${fmt(c.ebitda_budget, currency)}`} diff={c.ebitda_actual - c.ebitda_budget} />
-        <KpiCard label="Net Profit" value={fmt(c.netprofit_actual, currency)} sub={`Budget ${fmt(c.netprofit_budget, currency)}`} diff={c.netprofit_actual - c.netprofit_budget} />
+        <KpiCard label="Net Profit" value={fmt(c.netprofit_actual, currency)} sub={`Budget ${fmt(c.netprofit_budget, currency)}`} diff={c.netprofit_actual - c.netprofit_budget} rawValue={c.netprofit_actual} signColor />
+      </div>
+
+      <div className="panel">
+        <h3>Remarks &amp; Recommendations — {monthLabel(period)}</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Management-level commentary for this month. Unlike the per-row Notes above, this also appears in printed/exported PDF reports.</p>
+        <textarea value={monthlyRemarks[period] || ''} onChange={e => setMonthlyRemarks(prev => ({ ...prev, [period]: e.target.value }))}
+          rows={4} placeholder="e.g. Revenue down due to 2 vehicles under maintenance; expect recovery next month once Insurance renewal completes."
+          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
       </div>
     </div>
   );
@@ -1502,7 +2183,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
     const rows = [];
     ['revenue', 'direct', 'indirect', 'interest', 'belowLine'].forEach(sec => {
       rows.push({ type: 'section', label: SECTION_META[sec].title });
-      lineItems[sec].forEach(item => rows.push({ type: 'item', key: item.key, label: item.label, kind: SECTION_META[sec].kind }));
+      lineItems[sec].forEach(item => rows.push({ type: 'item', key: item.key, label: item.label, kind: SECTION_META[sec].kind, item }));
       if (sec === 'revenue') rows.push({ type: 'subtotal', key: 'income', label: 'Total Income', kind: 'income' });
       if (sec === 'direct') {
         rows.push({ type: 'subtotal', key: 'direct', label: 'Total Direct Expenses', kind: 'expense' });
@@ -1526,7 +2207,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
   function periodTotal(row) {
     let budget = 0, actual = 0;
     monthKeys.forEach(p => {
-      if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget += num(md.budget); actual += num(md.actual); }
+      if (row.type === 'item') { budget += itemFieldValue(row.item, monthlyData, p, 'budget'); actual += itemFieldValue(row.item, monthlyData, p, 'actual'); }
       else { const c = computeMonth(p, monthlyData, lineItems); budget += c[row.key + '_budget']; actual += c[row.key + '_actual']; }
     });
     return { budget, actual };
@@ -1600,7 +2281,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
                   {monthKeys.map((p, mi) => {
                     const tint = mi % 2 === 1 ? '#F7F8F5' : undefined;
                     let budget, actual;
-                    if (row.type === 'item') { const md = (monthlyData[p] || {})[row.key] || {}; budget = num(md.budget); actual = num(md.actual); }
+                    if (row.type === 'item') { budget = itemFieldValue(row.item, monthlyData, p, 'budget'); actual = itemFieldValue(row.item, monthlyData, p, 'actual'); }
                     else { const c = computeMonth(p, monthlyData, lineItems); budget = c[row.key + '_budget']; actual = c[row.key + '_actual']; }
                     if (row.type === 'ratio') {
                       const ptDiff = actual - budget;
@@ -1686,8 +2367,9 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
 
 /* ---------------- Occupancy Report (uses global report range) ---------------- */
 
-function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
-  const rows = vehicles.map(v => {
+function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, currency, vehicleRevenue, selectedVehicleIds, onToggleVehicleSelect, onSelectAllVehicles }) {
+  const displayVehicles = selectedVehicleIds && selectedVehicleIds.length ? vehicles.filter(v => selectedVehicleIds.includes(v.id)) : vehicles;
+  const rows = displayVehicles.map(v => {
     const monthPcts = monthKeys.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
     const valid = monthPcts.filter(x => x !== null);
     const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null;
@@ -1724,6 +2406,17 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
 
   return (
     <div>
+      {onToggleVehicleSelect && (
+        <div className="panel no-print">
+          <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— filters this whole report (totals, charts, matrix)</span></h3>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className={`chip ${selectedVehicleIds.length === 0 ? 'selected' : ''}`} onClick={onSelectAllVehicles}>All Cars</div>
+            {vehicles.map(v => (
+              <div key={v.id} className={`chip ${selectedVehicleIds.includes(v.id) ? 'selected' : ''}`} onClick={() => onToggleVehicleSelect(v.id)}>{v.name}</div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="kpi-row">
         <KpiCard label="Fleet Avg Occupancy" value={pctStr(fleetAvg)} sub={`base ${baseDays} days/month`} diff={fleetAvg - 0.5} />
         <div className="kpi-card"><div className="label">Vehicles Below 50%</div><div className="value mono" style={{ color: 'var(--red)' }}>{rows.filter(r => r.avg !== null && r.avg < 0.5).length}</div></div>
@@ -1760,33 +2453,83 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays }) {
           {Object.entries(buckets).map(([name, value], i) => (
             <div className="hbar-row" key={name}>
               <div className="hbar-name">{name}</div>
-              <div className="hbar-track"><div className="hbar-fill" style={{ width: (value / Math.max(1, vehicles.length) * 100) + '%', background: COLORS[i % COLORS.length] }} /></div>
+              <div className="hbar-track"><div className="hbar-fill" style={{ width: (value / Math.max(1, displayVehicles.length) * 100) + '%', background: COLORS[i % COLORS.length] }} /></div>
               <div className="hbar-val">{value}</div>
             </div>
           ))}
         </div>
       </div>
+
+      {vehicleRevenue && (() => {
+        let totalDays = 0, totalIncome = 0;
+        rows.forEach(r => {
+          monthKeys.forEach(p => {
+            const d = (occupancy[p] || {})[r.vehicle.id];
+            if (d !== undefined && d !== '') totalDays += num(d);
+            totalIncome += num((vehicleRevenue[p] || {})[r.vehicle.id]);
+          });
+        });
+        const perDay = totalDays ? totalIncome / totalDays : 0;
+        return (
+          <div className="panel">
+            <h3>Income vs Occupancy</h3>
+            <div className="kpi-row">
+              <div className="kpi-card"><div className="label">Total Occupied Days</div><div className="value mono">{totalDays}</div></div>
+              <div className="kpi-card"><div className="label">Total Income (fleet)</div><div className="value mono">{fmt(totalIncome, currency)}</div></div>
+              <div className="kpi-card"><div className="label">Revenue per Occupied Day</div><div className="value mono">{fmt(perDay, currency)}</div></div>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Occupancy Matrix</h3>
         <table>
-          <thead><tr><th>Car</th><th>Plate</th><th>Category</th>{monthKeys.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}<th className="num">Avg %</th><th>Remarks</th></tr></thead>
+          <thead><tr><th>S.No</th><th>Car</th><th>Plate</th><th>Category</th>{monthKeys.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}<th className="num">Avg %</th><th>Remarks</th></tr></thead>
           <tbody>
-            {rows.map(r => (
-              <tr key={r.vehicle.id}>
+            {rows.slice().sort((a, b) => {
+              const aOffice = (a.vehicle.category || '').trim() === 'Office Use Cars';
+              const bOffice = (b.vehicle.category || '').trim() === 'Office Use Cars';
+              if (aOffice !== bOffice) return aOffice ? 1 : -1;
+              return 0;
+            }).map((r, i) => {
+              const isOffice = (r.vehicle.category || '').trim() === 'Office Use Cars';
+              return (
+              <tr key={r.vehicle.id} style={isOffice ? { background: '#F2F3F0', color: 'var(--muted)' } : undefined}>
+                <td>{i + 1}</td>
                 <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td><td>{r.vehicle.category || '—'}</td>
-                {r.monthPcts.map((p, i) => <td key={i} className="num">{p === null ? '' : (p * 100).toFixed(0) + '%'}</td>)}
+                {r.monthPcts.map((p, i2) => <td key={i2} className="num">{p === null ? '' : (p * 100).toFixed(0) + '%'}</td>)}
                 <td className="num">{r.avg === null ? '' : (r.avg * 100).toFixed(0) + '%'}</td>
-                <td>{r.avg === null ? '' : <span className={`badge ${r.avg >= 0.5 ? 'pos' : 'neg'}`}>{r.avg >= 0.5 ? 'OK' : 'Workout'}</span>}</td>
+                <td>{isOffice ? <span className="badge" style={{ background: '#E2E4DE', color: 'var(--muted)' }}>Office Use</span> : (r.avg === null ? '' : <span className={`badge ${r.avg >= 0.5 ? 'pos' : 'neg'}`}>{r.avg >= 0.5 ? 'OK' : 'Workout'}</span>)}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      {agreements && agreements.some(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate)) && (
+        <div className="panel" style={{ overflowX: 'auto', borderLeft: '4px solid var(--steel)' }}>
+          <h3>Sub-Lease Vehicles (Borrowed — not part of owned fleet totals above)</h3>
+          <table>
+            <thead><tr><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th></tr></thead>
+            <tbody>
+              {agreements.filter(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate)).map(a => (
+                <tr key={a.id}>
+                  <td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
+                  <td>{a.startDate}</td>
+                  <td><span className={`badge ${a.status === 'open' ? 'pos' : ''}`}>{a.status}</span></td>
+                  <td className="num">{agreementTotalDays(a)}</td>
+                  <td className="num">{fmt(agreementTotalRevenue(a), currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
-
-/* ---------------- Vehicle Revenue Entry ---------------- */
 
 function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenue, currency }) {
   const [period, setPeriod] = useState(monthKeys[0]);
@@ -1826,9 +2569,18 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
 
 function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency }) {
   const [groupBy, setGroupBy] = useState('model'); // 'model' | 'category'
+  const [selectedIds, setSelectedIds] = useState([]); // empty = all vehicles included
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      if (prev.length === 0) return [id];
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      return [...prev, id];
+    });
+  }
+  const displayVehicles = selectedIds.length ? vehicles.filter(v => selectedIds.includes(v.id)) : vehicles;
 
-  const unitStats = useMemo(() => vehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }))
-    .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife]);
+  const unitStats = useMemo(() => displayVehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }))
+    .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [displayVehicles, rangeMonths, vehicleRevenue, defaultUsefulLife]);
 
   const groupKeyFor = (v) => groupBy === 'category' ? ((v.category && v.category.trim()) || 'Uncategorized') : v.name;
 
@@ -1836,7 +2588,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
     const groups = {};
     unitStats.forEach(({ vehicle, stats }) => {
       const key = groupKeyFor(vehicle);
-      if (!groups[key]) groups[key] = { name: key, units: 0, totalPurchaseValue: 0, totalIncome: 0, sumAvgMonthly: 0, sumRequired: 0, withBenchmark: 0, color: vehicle.color || null };
+      if (!groups[key]) groups[key] = { name: key, units: 0, totalPurchaseValue: 0, totalIncome: 0, sumAvgMonthly: 0, sumRequired: 0, withBenchmark: 0 };
       const g = groups[key];
       g.units++;
       g.totalPurchaseValue += num(vehicle.purchaseValue);
@@ -1849,7 +2601,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
       const avgRequiredPerUnit = g.withBenchmark ? g.sumRequired / g.withBenchmark : 0;
       const coverage = avgRequiredPerUnit > 0 ? avgMonthlyPerUnit / avgRequiredPerUnit : null;
       const verdict = coverage === null ? 'No Benchmark' : coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
-      return { ...g, avgMonthlyPerUnit, avgRequiredPerUnit, coverage, verdict, chartColor: g.color || COLORS[i % COLORS.length] };
+      return { ...g, avgMonthlyPerUnit, avgRequiredPerUnit, coverage, verdict, chartColor: COLORS[i % COLORS.length] };
     }).sort((a, b) => (b.coverage ?? -1) - (a.coverage ?? -1));
   }, [unitStats, groupBy]);
 
@@ -1859,6 +2611,15 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
 
   return (
     <div>
+      <div className="panel no-print">
+        <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— filters this whole report</span></h3>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className={`chip ${selectedIds.length === 0 ? 'selected' : ''}`} onClick={() => setSelectedIds([])}>All Cars</div>
+          {vehicles.map(v => (
+            <div key={v.id} className={`chip ${selectedIds.includes(v.id) ? 'selected' : ''}`} onClick={() => toggleSelect(v.id)}>{v.name}</div>
+          ))}
+        </div>
+      </div>
       <div className="panel">
         <h3>Useful Life Assumption</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Applied to every vehicle unless it has its own Useful Life Override set in the Vehicles tab. Required monthly income = Purchase Value ÷ (Useful Life × 12).</p>
@@ -1914,7 +2675,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
           <tbody>
             {unitStats.slice().sort((a, b) => groupKeyFor(a.vehicle).localeCompare(groupKeyFor(b.vehicle)) || a.vehicle.name.localeCompare(b.vehicle.name)).map(({ vehicle, stats }) => (
               <tr key={vehicle.id}>
-                <td><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: vehicle.color || '#2D6E8E' }} /></td>
+                <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: vehicle.color ? carColorHex(vehicle.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{vehicle.color || ''}</span></td>
                 <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.category || '—'}</td>
                 <td className="num">{vehicle.purchaseValue ? fmt(vehicle.purchaseValue, currency) : '—'}</td>
                 <td className="num">{stats.usefulLife} yrs</td>
@@ -1927,13 +2688,40 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
           </tbody>
         </table>
       </div>
+
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Vehicle Lifetime Performance</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Total time in operation and total income earned from each vehicle's Purchase Date to now (or to its Sale Date if sold) — independent of the report period selected above. Only vehicles with a Purchase Date set are shown.</p>
+        <table>
+          <thead><tr><th>Model</th><th>Plate</th><th>Purchase Date</th><th>Status</th><th className="num">Time in Operation</th><th className="num">Useful Life Consumed</th><th className="num">Total Income Earned</th></tr></thead>
+          <tbody>
+            {unitStats.filter(({ vehicle }) => vehicle.purchaseDate).map(({ vehicle, stats }) => {
+              const lt = vehicleLifetimeStats(vehicle, vehicleRevenue);
+              const usefulLifeMonths = stats.usefulLife * 12;
+              const consumedPct = usefulLifeMonths ? lt.monthsElapsed / usefulLifeMonths : 0;
+              return (
+                <tr key={vehicle.id}>
+                  <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.purchaseDate}</td>
+                  <td>{vehicle.saleDate ? <span className="badge neg">Sold {vehicle.saleDate}</span> : <span className="badge pos">Active</span>}</td>
+                  <td className="num">{(lt.monthsElapsed / 12).toFixed(1)} yrs ({lt.monthsElapsed} mo)</td>
+                  <td className="num">{consumedPct >= 1 ? <span style={{ color: 'var(--red)' }}>Fully consumed</span> : `${(consumedPct * stats.usefulLife).toFixed(1)} of ${stats.usefulLife} yrs used`}</td>
+                  <td className="num">{fmt(lt.totalIncome, currency)}</td>
+                </tr>
+              );
+            })}
+            {unitStats.filter(({ vehicle }) => vehicle.purchaseDate).length === 0 && (
+              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No vehicles have a Purchase Date set yet — add one in the Vehicles tab to see lifetime performance here.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
 /* ---------------- Feasibility Study ---------------- */
 
-function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWorkingDays }) {
+function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWorkingDays, onPrintStudy }) {
   const [selectedId, setSelectedId] = useState(studies[0] ? studies[0].id : null);
 
   function addStudy() {
@@ -1982,6 +2770,7 @@ function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWor
                     <td className="num">{s.marketDailyRate ? fmt(s.marketDailyRate, currency) : '—'}</td>
                     <td><span className="badge" style={{ background: verdictColor(c.verdict) + '20', color: verdictColor(c.verdict) }}>{c.verdict}</span></td>
                     <td style={{ textAlign: 'right' }}>
+                      <button className="icon-btn" title="Export PDF" onClick={e => { e.stopPropagation(); onPrintStudy(s.id); }}>⎙</button>{' '}
                       <button className="icon-btn" onClick={e => { e.stopPropagation(); duplicateStudy(s); }}>⧉</button>{' '}
                       <button className="icon-btn" onClick={e => { e.stopPropagation(); deleteStudy(s); }}>✕</button>
                     </td>
@@ -2001,6 +2790,7 @@ function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWor
 function FeasibilityDetail({ study, onChange, currency }) {
   const c = computeFeasibility(study);
   const verdictColor = (v) => v === 'Feasible' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Not Feasible' ? '#C1503F' : '#6B7380';
+  const [showForm, setShowForm] = useState(!study.totalPrice);
 
   function updateCostLine(id, field, value) {
     onChange({ costLines: study.costLines.map(cl => cl.id === id ? { ...cl, [field]: value } : cl) });
@@ -2012,11 +2802,69 @@ function FeasibilityDetail({ study, onChange, currency }) {
     onChange({ costLines: study.costLines.filter(cl => cl.id !== id) });
   }
 
+  const verdictPhrase = c.requiredDailyRate
+    ? `To cover total costs and expenses of ${fmt(c.costBase, currency)} and achieve your target profit, this vehicle must generate ${fmt(c.grandTotal, currency)} over its useful life — a minimum daily rate of ${fmt(c.requiredDailyRate, currency)} is needed to hit that goal.`
+    : 'Enter a Total Price and Useful Life to calculate the required daily rate.';
+
+  if (!showForm) {
+    return (
+      <div>
+        <div className="panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h3 style={{ margin: 0 }}>{study.name || '(unnamed study)'}</h3>
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 0' }}>{study.seatingCapacity ? `Seating: ${study.seatingCapacity} · ` : ''}Total Price {fmt(study.totalPrice, currency)} · Useful Life {study.usefulLifeYears || 1} yrs</p>
+            </div>
+            <button className="btn small" onClick={() => setShowForm(true)}>Edit Details</button>
+          </div>
+          <div className="kpi-row" style={{ marginTop: 14 }}>
+            <div className="kpi-card"><div className="label">Total Cost + Expenses</div><div className="value mono">{fmt(c.costBase, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Grand Total (Required Revenue)</div><div className="value mono">{fmt(c.grandTotal, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Required Daily Rate</div><div className="value mono">{fmt(c.requiredDailyRate, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Market Daily Rate</div><div className="value mono">{study.marketDailyRate ? fmt(study.marketDailyRate, currency) : '—'}</div></div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <span className="badge" style={{ background: verdictColor(c.verdict) + '20', color: verdictColor(c.verdict), fontSize: 13, padding: '5px 12px' }}>
+              {c.verdict}{c.gapPct !== null ? ` (market rate is ${pctStr(c.gapPct)} vs required)` : ''}
+            </span>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h3>Occupancy Scenarios</h3>
+          <table>
+            <thead><tr><th>Occupancy</th><th className="num">Days / Month</th><th className="num">Required Monthly Income</th><th className="num">At Market Rate</th></tr></thead>
+            <tbody>
+              {c.scenarios.map((s, i) => (
+                <tr key={i}>
+                  <td>{(s.occPct * 100).toFixed(0)}%</td>
+                  <td className="num">{s.days}</td>
+                  <td className="num">{fmt(s.requiredAmount, currency)}</td>
+                  <td className="num">{study.marketDailyRate ? fmt(s.marketAmount, currency) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="panel" style={{ background: '#F7F8F5' }}>
+          <h3>Verdict</h3>
+          <table>
+            <tbody><tr><td style={{ border: 'none', padding: '4px 0' }}>{verdictPhrase}</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="panel">
-        <h3>Vehicle Details</h3>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0 }}>Vehicle Details</h3>
+          <button className="btn small" onClick={() => setShowForm(false)}>Hide Form</button>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
           <div className="field" style={{ flex: '1 1 200px' }}><label>Study Name / Vehicle</label><input value={study.name} onChange={e => onChange({ name: e.target.value })} placeholder="Nissan Patrol" /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Seating Capacity</label><input value={study.seatingCapacity} onChange={e => onChange({ seatingCapacity: e.target.value })} placeholder="1 + 7" /></div>
         </div>
@@ -2101,6 +2949,11 @@ function FeasibilityDetail({ study, onChange, currency }) {
           </tbody>
         </table>
       </div>
+
+      <div className="panel" style={{ background: '#F7F8F5' }}>
+        <h3>Verdict</h3>
+        <p style={{ margin: 0 }}>{verdictPhrase}</p>
+      </div>
     </div>
   );
 }
@@ -2180,6 +3033,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
         <div className="kpi-card"><div className="label">Total Loan Amount (Payable)</div><div className="value mono">{fmt(fleetTotals.totalFinanced, currency)}</div></div>
         <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(fleetTotals.totalPaid, currency)}</div><div className="sub" style={{ color: 'var(--muted)' }}>{pctStr(fleetPaidPct)} of total</div></div>
         <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(fleetTotals.principalBalance + fleetTotals.interestBalance, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Total Interest</div><div className="value mono">{fmt(fleetTotals.interestBalance, currency)}</div><div className="sub" style={{ color: 'var(--muted)' }}>remaining, of {fmt(displayLoans.reduce((a, l) => a + loanStats(l).totalInterest, 0), currency)} total</div></div>
         <div className="kpi-card"><div className="label">Overdue Loans</div><div className="value mono" style={{ color: fleetTotals.overdueCount ? 'var(--red)' : 'var(--ink)' }}>{fleetTotals.overdueCount}</div></div>
       </div>
 
@@ -2199,7 +3053,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add a loan for each financed vehicle — enter the car value, down payment, interest rate, fees, and term, then generate the payment schedule.</p>
         ) : (
           <table>
-            <thead><tr><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th>Next Due</th><th></th></tr></thead>
+            <thead><tr><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th className="num">Interest Balance</th><th>Next Due</th><th></th></tr></thead>
             <tbody>
               {displayLoans.map(l => {
                 const s = loanStats(l);
@@ -2211,6 +3065,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
                     <td className="num">{fmt(s.monthlyEMI, currency)}</td>
                     <td className="num">{pctStr(s.paidPct)}</td>
                     <td className="num">{fmt(s.balancePrincipal, currency)}</td>
+                    <td className="num">{fmt(s.balanceInterest, currency)}</td>
                     <td>{s.nextDue ? <span className={`badge ${s.overdue ? 'neg' : 'pos'}`}>{fullDateLabel(s.nextDue.dueDate)}{s.overdue ? ' overdue' : ''}</span> : <span className="badge pos">Paid off</span>}</td>
                     <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteLoan(l); }}>✕</button></td>
                   </tr>
@@ -2564,11 +3419,15 @@ function LoanScheduleReport({ loan, companyName, currency }) {
 /* ---------------- Vehicles ---------------- */
 
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
-  const [form, setForm] = useState({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' });
+  const [form, setForm] = useState({ name: '', plate: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' });
   const [bulkText, setBulkText] = useState('');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState(null);
+  const [saleModalId, setSaleModalId] = useState(null);
+  const [saleDateInput, setSaleDateInput] = useState('');
+  const [saleValueInput, setSaleValueInput] = useState('');
   const CATEGORY_PRESETS = ['Economy Cars', 'Luxury Cars', 'Small Cars', 'Office Use Cars'];
+  const emptyForm = { name: '', plate: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' };
 
   function addVehicle() {
     if (!form.name.trim()) return;
@@ -2578,19 +3437,44 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
     } else {
       setVehicles([...vehicles, { id: uid('veh'), ...form }]);
     }
-    setForm({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' });
+    setForm(emptyForm);
   }
-  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', color: v.color || '#2D6E8E', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '' }); }
+  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', color: v.color || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '', purchaseDate: v.purchaseDate || '', registrationExpiry: v.registrationExpiry || '', ownershipType: v.ownershipType || 'owned', investorCommissionPct: v.investorCommissionPct || '', investorName: v.investorName || '' }); }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', category: parts[2] || '', purchaseValue: parts[3] || '', color: '#2D6E8E' }; });
+    const nv = lines.map(line => { const parts = line.split(',').map(p => p.trim()); return { id: uid('veh'), name: parts[0] || 'Unnamed', plate: parts[1] || '', category: parts[2] || '', purchaseValue: parts[3] || '', color: '' }; });
     setVehicles([...vehicles, ...nv]); setBulkText('');
+  }
+  function openSaleModal(v) { setSaleModalId(v.id); setSaleDateInput(todayStr()); setSaleValueInput(''); }
+  function confirmSale() {
+    if (!saleDateInput || !saleValueInput) { window.alert('Both Sale Date and Sale Value are required.'); return; }
+    if (!confirmDelete('this vehicle as SOLD (marks it Inactive going forward)', deletePin)) return;
+    setVehicles(vehicles.map(v => v.id === saleModalId ? { ...v, saleDate: saleDateInput, saleValue: saleValueInput } : v));
+    setSaleModalId(null);
+  }
+  function reactivateVehicle(v) {
+    if (!confirmDelete('reversing the sale — this vehicle becomes Active again', deletePin)) return;
+    setVehicles(vehicles.map(x => x.id === v.id ? { ...x, saleDate: '', saleValue: '' } : x));
   }
   const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div>
+      {saleModalId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSaleModalId(null)}>
+          <div className="panel" style={{ width: 360, background: '#fff' }} onClick={e => e.stopPropagation()}>
+            <h3>Mark Vehicle as Sold</h3>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Both fields are required — this gives a complete purchase-to-sale history.</p>
+            <div className="field"><label>Sale Date</label><input type="date" value={saleDateInput} onChange={e => setSaleDateInput(e.target.value)} /></div>
+            <div className="field"><label>Sale Value ({currency})</label><input type="number" value={saleValueInput} onChange={e => setSaleValueInput(e.target.value)} /></div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="btn primary" onClick={confirmSale}>Confirm Sale</button>
+              <button className="btn" onClick={() => setSaleModalId(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="panel">
         <h3>{editId ? 'Edit Vehicle' : 'Add Vehicle'}</h3>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -2601,16 +3485,37 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
             <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
             <datalist id="category-presets">{CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}</datalist>
           </div>
-          <div className="field" style={{ flex: '0 0 70px' }}>
-            <label>Chart Color</label>
-            <input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} style={{ width: '100%', height: 36, padding: 2, border: '1px solid var(--line)', borderRadius: 6 }} />
+          <div className="field" style={{ flex: '1 1 130px' }}>
+            <label>Car Color</label>
+            <select value={form.color} onChange={e => setForm({ ...form, color: e.target.value })}>
+              <option value="">Select color…</option>
+              {CAR_COLOR_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={form.purchaseValue} onChange={e => setForm({ ...form, purchaseValue: e.target.value })} placeholder="50000" /></div>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses default" /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses 4-yr default" /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Purchase Date</label><input type="date" value={form.purchaseDate} onChange={e => setForm({ ...form, purchaseDate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Registration Expiry</label><input type="date" value={form.registrationExpiry} onChange={e => setForm({ ...form, registrationExpiry: e.target.value })} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
+          <div className="field" style={{ flex: '1 1 160px' }}>
+            <label>Ownership Type</label>
+            <select value={form.ownershipType} onChange={e => setForm({ ...form, ownershipType: e.target.value })}>
+              <option value="owned">Owned</option>
+              <option value="sublease">Sub-Lease (borrowed)</option>
+              <option value="investor">Investor Vehicle</option>
+            </select>
+          </div>
+          {form.ownershipType === 'investor' && (
+            <>
+              <div className="field" style={{ flex: '1 1 140px' }}><label>Company Commission %</label><input type="number" value={form.investorCommissionPct} onChange={e => setForm({ ...form, investorCommissionPct: e.target.value })} placeholder="20-30" /></div>
+              <div className="field" style={{ flex: '1 1 160px' }}><label>Investor Name / Contact</label><input value={form.investorName} onChange={e => setForm({ ...form, investorName: e.target.value })} /></div>
+            </>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button className="btn primary" onClick={addVehicle}>{editId ? 'Update Vehicle' : '+ Add Vehicle'}</button>
-          {editId && <button className="btn" onClick={() => { setEditId(null); setForm({ name: '', plate: '', category: '', color: '#2D6E8E', purchaseValue: '', usefulLifeOverride: '' }); }}>Cancel</button>}
+          {editId && <button className="btn" onClick={() => { setEditId(null); setForm(emptyForm); }}>Cancel</button>}
         </div>
       </div>
       <div className="panel">
@@ -2625,21 +3530,33 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th>Color</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
+          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th>Ownership</th><th>Color</th><th>Status</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
-            {filtered.map(v => (
-              <tr key={v.id}>
+            {filtered.map(v => {
+              const isSold = !!v.saleDate;
+              return (
+              <tr key={v.id} style={isSold ? { opacity: 0.7 } : undefined}>
                 <td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
-                <td><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 4, background: v.color || '#2D6E8E', border: '1px solid var(--line)' }} /></td>
+                <td>{v.ownershipType === 'sublease' ? <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> : v.ownershipType === 'investor' ? <span className="badge" style={{ background: '#FFF6E8', color: 'var(--amber)' }}>Investor</span> : <span className="badge" style={{ background: '#EFF4F1', color: 'var(--green)' }}>Owned</span>}</td>
+                <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 4, background: v.color ? carColorHex(v.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{v.color || '—'}</span></td>
+                <td>
+                  {isSold
+                    ? <span className="badge neg" title={`Sold ${v.saleDate} for ${fmt(v.saleValue, currency)}`}>Sold</span>
+                    : <span className="badge pos">Active</span>}
+                </td>
                 <td className="num">{v.purchaseValue ? num(v.purchaseValue).toLocaleString('en-US') : '—'}</td>
-                <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : 'default'}</td>
-                <td style={{ textAlign: 'right' }}>
+                <td className="num">{v.usefulLifeOverride ? v.usefulLifeOverride + ' yrs' : '4 yrs (default)'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button className="icon-btn" onClick={() => editVehicle(v)}>✎</button>{' '}
+                  {isSold
+                    ? <button className="icon-btn" title="Reactivate" onClick={() => reactivateVehicle(v)}>↺</button>
+                    : <button className="icon-btn" title="Mark as Sold" onClick={() => openSaleModal(v)}>$</button>}{' '}
                   <button className="icon-btn" onClick={() => deleteVehicle(v)}>✕</button>
                 </td>
               </tr>
-            ))}
-            {filtered.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
+              );
+            })}
+            {filtered.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2649,9 +3566,673 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
 
 /* ---------------- Settings ---------------- */
 
-function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup, onResetLineItems, onReorderLineItems, onClearPnl, onClearOccupancy }) {
+function addMonthsToDate(dateStr, delta) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target = new Date(y, m - 1 + delta, d);
+  return target.getFullYear() + '-' + String(target.getMonth() + 1).padStart(2, '0') + '-' + String(target.getDate()).padStart(2, '0');
+}
+
+function addDaysToDate(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const target = new Date(y, m - 1, d + days);
+  return target.getFullYear() + '-' + String(target.getMonth() + 1).padStart(2, '0') + '-' + String(target.getDate()).padStart(2, '0');
+}
+
+function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, deletePin }) {
+  const [tab, setTab] = useState('loans');
+  const [selectedLoanId, setSelectedLoanId] = useState(loans[0] ? loans[0].id : null);
+  const [selectedCardId, setSelectedCardId] = useState(cards[0] ? cards[0].id : null);
+
+  function addLoan() {
+    const l = emptyLoan();
+    l.modelName = 'New Personal Loan';
+    setLoans([...loans, l]);
+    setSelectedLoanId(l.id);
+  }
+  function deleteLoan(loan) { if (!confirmDelete(loan.modelName || 'this loan', deletePin)) return; setLoans(loans.filter(l => l.id !== loan.id)); if (selectedLoanId === loan.id) setSelectedLoanId(null); }
+  function updateLoan(id, patch) { setLoans(loans.map(l => l.id === id ? { ...l, ...patch } : l)); }
+
+  function addCard() {
+    const c = { id: uid('card'), name: 'New Credit Card', creditLimit: '', entries: [] };
+    setCards([...cards, c]);
+    setSelectedCardId(c.id);
+  }
+  function deleteCard(card) { if (!confirmDelete(card.name, deletePin)) return; setCards(cards.filter(c => c.id !== card.id)); if (selectedCardId === card.id) setSelectedCardId(null); }
+  function updateCard(id, patch) { setCards(cards.map(c => c.id === id ? { ...c, ...patch } : c)); }
+
+  const selectedLoan = loans.find(l => l.id === selectedLoanId);
+  const selectedCard = cards.find(c => c.id === selectedCardId);
+
+  return (
+    <div>
+      <div className="panel">
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>Your own personal credit cards and loans — kept entirely separate from the business's Vehicle Financing, visible only to Admin.</p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${tab === 'loans' ? 'selected' : ''}`} onClick={() => setTab('loans')}>Personal Loans</div>
+          <div className={`chip ${tab === 'cards' ? 'selected' : ''}`} onClick={() => setTab('cards')}>Credit Cards</div>
+        </div>
+      </div>
+
+      {tab === 'loans' && (
+        <>
+          <div className="panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>Personal Loans</h3>
+              <button className="btn primary" onClick={addLoan}>+ Add Loan</button>
+            </div>
+            {loans.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No personal loans added yet.</p> : (
+              <table>
+                <thead><tr><th>Description</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th></th></tr></thead>
+                <tbody>
+                  {loans.map(l => {
+                    const s = loanStats(l);
+                    return (
+                      <tr key={l.id} style={{ background: l.id === selectedLoanId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedLoanId(l.id)}>
+                        <td>{l.modelName}</td><td>{l.lender || '—'}</td>
+                        <td className="num">{fmt(loanAmount(l), currency)}</td>
+                        <td className="num">{fmt(s.monthlyEMI, currency)}</td>
+                        <td className="num">{pctStr(s.paidPct)}</td>
+                        <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteLoan(l); }}>✕</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+          {selectedLoan && <FinancingDetail loan={selectedLoan} vehicles={[]} onChange={patch => updateLoan(selectedLoan.id, patch)} currency={currency} deletePin={deletePin} />}
+        </>
+      )}
+
+      {tab === 'cards' && (
+        <>
+          <div className="panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>Credit Cards</h3>
+              <button className="btn primary" onClick={addCard}>+ Add Card</button>
+            </div>
+            {cards.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No credit cards added yet.</p> : (
+              <table>
+                <thead><tr><th>Card</th><th className="num">Credit Limit</th><th className="num">Current Balance</th><th className="num">Available</th><th></th></tr></thead>
+                <tbody>
+                  {cards.map(c => {
+                    const balance = (c.entries || []).reduce((a, e) => a + num(e.charge) - num(e.payment), 0);
+                    return (
+                      <tr key={c.id} style={{ background: c.id === selectedCardId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedCardId(c.id)}>
+                        <td>{c.name}</td>
+                        <td className="num">{fmt(c.creditLimit, currency)}</td>
+                        <td className="num">{fmt(balance, currency)}</td>
+                        <td className="num">{fmt(num(c.creditLimit) - balance, currency)}</td>
+                        <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteCard(c); }}>✕</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+          {selectedCard && <CreditCardDetail card={selectedCard} onChange={patch => updateCard(selectedCard.id, patch)} currency={currency} deletePin={deletePin} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CreditCardDetail({ card, onChange, currency, deletePin }) {
+  const [entryDate, setEntryDate] = useState(todayStr());
+  const [entryCharge, setEntryCharge] = useState('');
+  const [entryPayment, setEntryPayment] = useState('');
+  const [entryNote, setEntryNote] = useState('');
+
+  const entries = card.entries || [];
+  const balance = entries.reduce((a, e) => a + num(e.charge) - num(e.payment), 0);
+  const available = num(card.creditLimit) - balance;
+  const utilizationPct = num(card.creditLimit) ? balance / num(card.creditLimit) : 0;
+
+  function addEntry() {
+    if (!entryCharge && !entryPayment) return;
+    onChange({ entries: [...entries, { id: uid('cce'), date: entryDate, charge: entryCharge, payment: entryPayment, note: entryNote }] });
+    setEntryCharge(''); setEntryPayment(''); setEntryNote('');
+  }
+  function deleteEntry(id) {
+    if (!confirmDelete('this entry', deletePin)) return;
+    onChange({ entries: entries.filter(e => e.id !== id) });
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Card Details</h3>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 200px' }}><label>Card Name</label><input value={card.name} onChange={e => onChange({ name: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Credit Limit ({currency})</label><input type="number" value={card.creditLimit} onChange={e => onChange({ creditLimit: e.target.value })} /></div>
+        </div>
+        <div className="kpi-row" style={{ marginTop: 14 }}>
+          <div className="kpi-card"><div className="label">Current Balance</div><div className="value mono">{fmt(balance, currency)}</div></div>
+          <div className="kpi-card"><div className="label">Available Credit</div><div className="value mono">{fmt(available, currency)}</div></div>
+          <div className="kpi-card"><div className="label">Utilization</div><div className="value mono" style={{ color: utilizationPct > 0.7 ? 'var(--red)' : 'var(--ink)' }}>{pctStr(utilizationPct)}</div></div>
+        </div>
+        <div className="panel" style={{ marginTop: 10, background: '#F7F8F5' }}>
+          <HBarList data={[{ name: 'Utilization', value: Math.round(utilizationPct * 100), display: pctStr(utilizationPct), color: utilizationPct > 0.9 ? '#C1503F' : utilizationPct > 0.7 ? '#D98E3F' : '#3E9C6E' }]} maxVal={100} />
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Add Charge / Payment</h3>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>Date</label><input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} /></div>
+          <div className="field" style={{ flex: '1 1 120px' }}><label>Charge ({currency})</label><input type="number" value={entryCharge} onChange={e => setEntryCharge(e.target.value)} /></div>
+          <div className="field" style={{ flex: '1 1 120px' }}><label>Payment ({currency})</label><input type="number" value={entryPayment} onChange={e => setEntryPayment(e.target.value)} /></div>
+          <div className="field" style={{ flex: '1 1 160px' }}><label>Note</label><input value={entryNote} onChange={e => setEntryNote(e.target.value)} /></div>
+        </div>
+        <button className="btn primary" style={{ marginTop: 8 }} onClick={addEntry}>+ Add Entry</button>
+      </div>
+
+      <div className="panel">
+        <h3>History</h3>
+        <table>
+          <thead><tr><th>Date</th><th>Note</th><th className="num">Charge</th><th className="num">Payment</th><th></th></tr></thead>
+          <tbody>
+            {entries.slice().sort((a, b) => b.date.localeCompare(a.date)).map(e => (
+              <tr key={e.id}>
+                <td>{e.date}</td><td>{e.note || '—'}</td>
+                <td className="num">{e.charge ? fmt(e.charge, currency) : '—'}</td>
+                <td className="num">{e.payment ? fmt(e.payment, currency) : '—'}</td>
+                <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={() => deleteEntry(e.id)}>✕</button></td>
+              </tr>
+            ))}
+            {entries.length === 0 && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No entries yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function InvestorsFleetPanel({ vehicles, vehicleRevenue, rangeMonths, currency }) {
+  const investorVehicles = vehicles.filter(v => v.ownershipType === 'investor');
+
+  const rows = investorVehicles.map(v => {
+    let revenue = 0;
+    rangeMonths.forEach(p => { revenue += num((vehicleRevenue[p] || {})[v.id]); });
+    const commissionPct = num(v.investorCommissionPct) / 100;
+    const commission = revenue * commissionPct;
+    const payout = revenue - commission;
+    return { v, revenue, commission, payout };
+  });
+  const totals = rows.reduce((a, r) => ({ revenue: a.revenue + r.revenue, commission: a.commission + r.commission, payout: a.payout + r.payout }), { revenue: 0, commission: 0, payout: 0 });
+
+  if (investorVehicles.length === 0) {
+    return <div className="empty-state"><h2>No Investor Vehicles yet</h2><p>Mark a vehicle's Ownership Type as "Investor Vehicle" in the Vehicles tab, with a Commission % and investor name, to see it here.</p></div>;
+  }
+
+  return (
+    <div>
+      <div className="kpi-row">
+        <div className="kpi-card"><div className="label">Total Revenue (Investor Cars)</div><div className="value mono">{fmt(totals.revenue, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Company's Commission</div><div className="value mono">{fmt(totals.commission, currency)}</div></div>
+        <div className="kpi-card"><div className="label">Investors' Payout</div><div className="value mono">{fmt(totals.payout, currency)}</div></div>
+      </div>
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Investors Fleet — {rangeMonths.map(monthLabel).join(' – ')}</h3>
+        <table>
+          <thead><tr><th>Vehicle</th><th>Investor</th><th className="num">Commission %</th><th className="num">Total Revenue</th><th className="num">Company's Commission</th><th className="num">Investor's Payout</th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.v.id}>
+                <td>{r.v.name} ({r.v.plate})</td>
+                <td>{r.v.investorName || '—'}</td>
+                <td className="num">{r.v.investorCommissionPct || 0}%</td>
+                <td className="num">{fmt(r.revenue, currency)}</td>
+                <td className="num">{fmt(r.commission, currency)}</td>
+                <td className="num">{fmt(r.payout, currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setInsurancePolicies, currency }) {
+  const today = todayStr();
+
+  function latestPolicyFor(vehicleId) {
+    const list = insurancePolicies.filter(p => p.vehicleId === vehicleId).sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''));
+    return list[0] || null;
+  }
+
+  function statusFor(regExpiry, insExpiry) {
+    const dates = [regExpiry, insExpiry].filter(Boolean);
+    if (dates.length === 0) return { label: 'No Data', color: '#6B7380' };
+    const earliest = dates.sort()[0];
+    const daysUntil = Math.round((new Date(earliest) - new Date(today)) / 86400000);
+    if (daysUntil < 0) return { label: 'Expired', color: '#C1503F' };
+    if (daysUntil <= 30) return { label: 'Expiring Next Month', color: '#D98E3F' };
+    return { label: 'Ok', color: '#3E9C6E' };
+  }
+
+  function renewVehicle(v) {
+    const latest = latestPolicyFor(v.id);
+    const newInsuranceStart = latest && latest.endDate ? addDaysToDate(latest.endDate, 1) : today;
+    const newInsuranceEnd = addMonthsToDate(newInsuranceStart, 13);
+    const newRegExpiry = v.registrationExpiry ? addMonthsToDate(v.registrationExpiry, 12) : addMonthsToDate(today, 12);
+    setInsurancePolicies([...insurancePolicies, { id: uid('ins'), vehicleId: v.id, premiumAmount: latest ? latest.premiumAmount : '', startDate: newInsuranceStart, endDate: newInsuranceEnd }]);
+    setVehicles(vehicles.map(x => x.id === v.id ? { ...x, registrationExpiry: newRegExpiry } : x));
+    window.alert(`Renewed. New Registration Expiry: ${newRegExpiry}. New Insurance Policy: ${newInsuranceStart} to ${newInsuranceEnd} — both editable in Vehicles / Insurance Policies if the actual dates differ slightly.`);
+  }
+
+  const rows = vehicles.map((v, i) => {
+    const latest = latestPolicyFor(v.id);
+    const insExpiry = latest ? latest.endDate : '';
+    const monthsCovered = latest && latest.startDate && latest.endDate ? periodsBetween(latest.startDate.slice(0, 7), latest.endDate.slice(0, 7)).length : 0;
+    const monthlyPremium = latest ? num(latest.premiumAmount) / (monthsCovered || 1) : 0;
+    const status = statusFor(v.registrationExpiry, insExpiry);
+    const regExpired = v.registrationExpiry && v.registrationExpiry < today;
+    return { sno: i + 1, v, insExpiry, premium: latest ? latest.premiumAmount : '', monthlyPremium, status, regExpired };
+  });
+
+  return (
+    <div>
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Fleet Data Report / Vehicle Information Summary</h3>
+        <table>
+          <thead><tr><th>S.No</th><th>Car</th><th>Category</th><th>Color</th><th>Registration Expiry</th><th>Insurance Expiry</th><th className="num">Insurance Premium</th><th className="num">Monthly Premium</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.v.id}>
+                <td>{r.sno}</td>
+                <td>{r.v.name} ({r.v.plate})</td>
+                <td>{r.v.category || '—'}</td>
+                <td>{r.v.color || '—'}</td>
+                <td>{r.v.registrationExpiry || '—'}</td>
+                <td>{r.insExpiry || '—'}</td>
+                <td className="num">{r.premium ? fmt(r.premium, currency) : '—'}</td>
+                <td className="num">{r.monthlyPremium ? fmt(r.monthlyPremium, currency) : '—'}</td>
+                <td>
+                  <span className="badge" style={{ background: r.status.color + '20', color: r.status.color, fontWeight: r.status.label !== 'Ok' ? 700 : 400, animation: r.status.label === 'Expired' ? 'pulse 1.5s infinite' : 'none' }}>{r.status.label}</span>
+                </td>
+                <td>{r.regExpired && <button className="btn small primary" onClick={() => renewVehicle(r.v)}>Renew Vehicle</button>}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No vehicles yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function emptyAgreement() {
+  return {
+    id: uid('agr'), raNumber: '', plate: '', vehicleId: '',
+    type: 'daily', startDate: todayStr(), closeDate: '', status: 'open',
+    rate: '', daysOverride: '', revenueOverride: '',
+    replacementPlate: '', notes: '',
+  };
+}
+
+function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin }) {
+  const emptyForm = emptyAgreement();
+  const [form, setForm] = useState(emptyForm);
+  const [view, setView] = useState('open'); // 'open' | 'all' | 'add' | 'import'
+  const [closingId, setClosingId] = useState(null);
+  const [closeDateInput, setCloseDateInput] = useState(todayStr());
+  const [closeRateInput, setCloseRateInput] = useState('');
+  const [closeDaysInput, setCloseDaysInput] = useState('');
+  const [closeRevenueInput, setCloseRevenueInput] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [search, setSearch] = useState('');
+
+  function plateStatus(plate, excludeId) {
+    const norm = (plate || '').trim().toLowerCase();
+    const conflict = agreements.find(a => a.id !== excludeId && a.status === 'open' && (a.plate || '').trim().toLowerCase() === norm);
+    return conflict;
+  }
+
+  function addAgreement() {
+    if (!form.plate || !form.startDate || !form.rate) { window.alert('Vehicle Plate, Start Date, and Rate are all required.'); return; }
+    const conflict = plateStatus(form.plate);
+    if (conflict) {
+      if (!window.confirm(`Warning: "${form.plate}" already has an open agreement (RA# ${conflict.raNumber || conflict.id}). This vehicle may already be out. Add this new agreement anyway?`)) return;
+    }
+    const vehicle = findVehicleByPlate(vehicles, form.plate);
+    setAgreements([...agreements, { ...form, vehicleId: vehicle ? vehicle.id : '' }]);
+    setForm(emptyAgreement());
+    setView('open');
+  }
+
+  function openCloseModal(a) {
+    setClosingId(a.id);
+    setCloseDateInput(todayStr());
+    setCloseRateInput(a.rate);
+    setCloseDaysInput('');
+    setCloseRevenueInput('');
+  }
+  const closingAgreement = agreements.find(a => a.id === closingId);
+  const previewDays = closingAgreement ? (closeDaysInput !== '' ? num(closeDaysInput) : (() => {
+    const start = new Date(closingAgreement.startDate);
+    const end = new Date(closeDateInput);
+    return Math.max(0, Math.round((end - start) / 86400000) + 1);
+  })()) : 0;
+  const previewRate = closeRateInput !== '' ? num(closeRateInput) : (closingAgreement ? num(closingAgreement.rate) : 0);
+  const previewDailyRate = closingAgreement && closingAgreement.type === 'monthly' ? previewRate / 30 : previewRate;
+  const previewRevenue = closeRevenueInput !== '' ? num(closeRevenueInput) : previewDays * previewDailyRate;
+
+  function confirmClose() {
+    setAgreements(agreements.map(a => a.id === closingId ? {
+      ...a, status: 'closed', closeDate: closeDateInput, rate: closeRateInput !== '' ? closeRateInput : a.rate,
+      daysOverride: closeDaysInput !== '' ? closeDaysInput : '', revenueOverride: closeRevenueInput !== '' ? closeRevenueInput : '',
+    } : a));
+    setClosingId(null);
+  }
+
+  function reopenAgreement(a) {
+    if (!confirmDelete('reopening this closed agreement', deletePin)) return;
+    setAgreements(agreements.map(x => x.id === a.id ? { ...x, status: 'open', closeDate: '' } : x));
+  }
+  function voidAgreement(a) {
+    if (!confirmDelete(`voiding agreement ${a.raNumber || a.id} (removes it from all occupancy/revenue calculations)`, deletePin)) return;
+    setAgreements(agreements.map(x => x.id === a.id ? { ...x, status: 'void' } : x));
+  }
+  function deleteAgreement(a) {
+    if (!confirmDelete(`permanently deleting agreement ${a.raNumber || a.id}`, deletePin)) return;
+    setAgreements(agreements.filter(x => x.id !== a.id));
+  }
+
+  function parseBulk() {
+    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(line => {
+      const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
+      const [raNumber, plate, type, startDate, endDateOrStatus, rate, status] = cols;
+      const isClosedHint = (endDateOrStatus || '').toLowerCase().includes('close') || (status || '').toLowerCase().includes('close');
+      const vehicle = findVehicleByPlate(vehicles, plate);
+      return {
+        id: uid('agr'), raNumber: raNumber || '', plate: plate || '', vehicleId: vehicle ? vehicle.id : '',
+        type: (type || '').toLowerCase().includes('month') ? 'monthly' : 'daily',
+        startDate: parseFlexibleDate(startDate) || todayStr(),
+        closeDate: isClosedHint && endDateOrStatus && !endDateOrStatus.toLowerCase().includes('close') ? parseFlexibleDate(endDateOrStatus) : '',
+        status: isClosedHint ? 'closed' : 'open',
+        rate: rate || '0', daysOverride: '', revenueOverride: '', replacementPlate: '', notes: '',
+      };
+    }).filter(a => a.plate);
+    setAgreements([...agreements, ...parsed]);
+    setBulkText('');
+    setView('all');
+  }
+
+  const openAgreements = agreements.filter(a => a.status === 'open');
+  const filtered = agreements.filter(a => !search || (a.raNumber || '').toLowerCase().includes(search.toLowerCase()) || (a.plate || '').toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div>
+      {closingId && closingAgreement && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setClosingId(null)}>
+          <div className="panel" style={{ width: 420, background: '#fff' }} onClick={e => e.stopPropagation()}>
+            <h3>Close Agreement — {closingAgreement.raNumber || closingAgreement.plate}</h3>
+            <div className="field"><label>Close Date</label><input type="date" value={closeDateInput} onChange={e => setCloseDateInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') confirmClose(); }} /></div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div className="field" style={{ flex: 1 }}><label>Days (auto, editable)</label><input type="number" value={closeDaysInput} onChange={e => setCloseDaysInput(e.target.value)} placeholder={previewDays} /></div>
+              <div className="field" style={{ flex: 1 }}><label>Rate ({currency}, editable)</label><input type="number" value={closeRateInput} onChange={e => setCloseRateInput(e.target.value)} /></div>
+            </div>
+            <div className="field"><label>Total Revenue (auto, editable)</label><input type="number" value={closeRevenueInput} onChange={e => setCloseRevenueInput(e.target.value)} placeholder={previewRevenue.toFixed(2)} /></div>
+            <div className="panel" style={{ background: '#F7F8F5', marginTop: 4 }}>
+              <p style={{ margin: 0, fontSize: 13.5 }}><b>Summary:</b> {previewDays} days × {fmt(previewDailyRate, currency)}/day = <b>{fmt(previewRevenue, currency)}</b></p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="btn primary" onClick={confirmClose}>Confirm Close</button>
+              <button className="btn" onClick={() => setClosingId(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="panel">
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>Rental Agreements drive both Occupancy and Vehicle Income automatically — enter a contract once, and it feeds every report. RA# and Vehicle Plate are the core tracking keys. Cars whose plate isn't in your Vehicles list are automatically treated as Sub-Lease and excluded from your owned-fleet totals.</p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${view === 'open' ? 'selected' : ''}`} onClick={() => setView('open')}>Open Agreements ({openAgreements.length})</div>
+          <div className={`chip ${view === 'all' ? 'selected' : ''}`} onClick={() => setView('all')}>All Agreements ({agreements.length})</div>
+          <div className={`chip ${view === 'add' ? 'selected' : ''}`} onClick={() => setView('add')}>+ Add Agreement</div>
+          <div className={`chip ${view === 'import' ? 'selected' : ''}`} onClick={() => setView('import')}>Import / Paste</div>
+        </div>
+      </div>
+
+      {view === 'add' && (
+        <div className="panel">
+          <h3>Add Agreement</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>RA# (Agreement No)</label><input value={form.raNumber} onChange={e => setForm({ ...form, raNumber: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}>
+              <label>Vehicle Plate</label>
+              <input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} list="fleet-plates" placeholder="e.g. 9182-G" />
+              <datalist id="fleet-plates">{vehicles.map(v => <option key={v.id} value={v.plate} />)}</datalist>
+            </div>
+            <div className="field" style={{ flex: '1 1 120px' }}>
+              <label>Type</label>
+              <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                <option value="daily">Daily</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 150px' }}><label>Start Date</label><input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Rate ({currency}{form.type === 'monthly' ? '/month' : '/day'})</label><input type="number" value={form.rate} onChange={e => setForm({ ...form, rate: e.target.value })} /></div>
+          </div>
+          {form.plate && !findVehicleByPlate(vehicles, form.plate) && (
+            <p style={{ fontSize: 12, color: 'var(--amber)', marginTop: 6 }}>⚠ This plate isn't in your fleet — will be tracked as a Sub-Lease vehicle, excluded from owned-fleet occupancy/revenue totals.</p>
+          )}
+          {form.plate && plateStatus(form.plate) && (
+            <p style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>⚠ Vehicle is already on an open agreement (RA# {plateStatus(form.plate).raNumber || plateStatus(form.plate).id}).</p>
+          )}
+          <button className="btn primary" style={{ marginTop: 10 }} onClick={addAgreement}>+ Add Agreement</button>
+        </div>
+      )}
+
+      {view === 'import' && (
+        <div className="panel">
+          <h3>Import / Paste Agreements</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>One agreement per line: <code>RA#, Plate, Type (Daily/Monthly), Start Date, End Date or "Open"/"Closed", Rate</code>. Plates not in your fleet are auto-flagged as Sub-Lease. Use the Rate column only — never Total Amount (which includes VAT).</p>
+          <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6}
+            style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
+            placeholder={"15689, 98272-Z, Daily, 01/07/2026, Closed, 500\n15693, 9182-G, Daily, 02/07/2026, Open, 500"} />
+          <button className="btn primary" style={{ marginTop: 8 }} onClick={parseBulk}>Import Agreements</button>
+        </div>
+      )}
+
+      {view === 'open' && (
+        <div className="panel" style={{ overflowX: 'auto' }}>
+          <h3>Open Agreements — Weekly Review</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Review this list weekly — confirm which are still genuinely active before finalizing the month's occupancy. Close any that have actually ended.</p>
+          <table>
+            <thead><tr><th>RA#</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start Date</th><th className="num">Days So Far</th><th></th></tr></thead>
+            <tbody>
+              {openAgreements.map(a => {
+                const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : null;
+                return (
+                  <tr key={a.id}>
+                    <td>{a.raNumber || '—'}</td><td>{a.plate}</td>
+                    <td>{vehicle ? vehicle.name : <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span>}</td>
+                    <td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td><td>{a.startDate}</td>
+                    <td className="num">{agreementTotalDays(a)}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="btn small primary" onClick={() => openCloseModal(a)}>Close</button>{' '}
+                      <button className="icon-btn" onClick={() => voidAgreement(a)} title="Void">⊘</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {openAgreements.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No open agreements.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {view === 'all' && (
+        <div className="panel" style={{ overflowX: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>All Agreements</h3>
+            <input placeholder="Search RA# or plate" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
+          </div>
+          <table>
+            <thead><tr><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
+            <tbody>
+              {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map(a => (
+                <tr key={a.id}>
+                  <td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
+                  <td>{a.startDate}</td><td>{a.closeDate || '—'}</td>
+                  <td><span className={`badge ${a.status === 'open' ? 'pos' : a.status === 'void' ? 'neg' : ''}`} style={a.status === 'closed' ? { background: '#EFF4F1', color: 'var(--green)' } : undefined}>{a.status}</span></td>
+                  <td className="num">{agreementTotalDays(a)}</td>
+                  <td className="num">{fmt(agreementTotalRevenue(a), currency)}</td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {a.status === 'closed' && <button className="icon-btn" title="Reopen" onClick={() => reopenAgreement(a)}>↺</button>}{' '}
+                    <button className="icon-btn" onClick={() => deleteAgreement(a)}>✕</button>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }) {
+  const emptyForm = { vehicleId: '', premiumAmount: '', startDate: '', endDate: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [editId, setEditId] = useState(null);
+
+  function vehicleName(id) { const v = vehicles.find(x => x.id === id); return v ? `${v.name} (${v.plate})` : '(unknown vehicle)'; }
+  function monthsCovered(p) { return p.startDate && p.endDate ? periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7)).length : 0; }
+
+  function savePolicy() {
+    if (!form.vehicleId || !form.premiumAmount || !form.startDate || !form.endDate) { window.alert('Vehicle, Premium Amount, Start Date, and End Date are all required.'); return; }
+    if (editId) {
+      setPolicies(policies.map(p => p.id === editId ? { ...p, ...form } : p));
+      setEditId(null);
+    } else {
+      setPolicies([...policies, { id: uid('ins'), ...form }]);
+    }
+    setForm(emptyForm);
+  }
+  function editPolicy(p) { setEditId(p.id); setForm({ vehicleId: p.vehicleId, premiumAmount: p.premiumAmount, startDate: p.startDate, endDate: p.endDate }); }
+  function deletePolicy(p) { if (!confirmDelete(`this insurance policy for ${vehicleName(p.vehicleId)}`, deletePin)) return; setPolicies(policies.filter(x => x.id !== p.id)); }
+
+  const sorted = policies.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>{editId ? 'Edit Policy' : 'Add Insurance Policy'}</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Multiple policies per vehicle over time are fine — renewals become new entries, old ones stay as history. The premium is split evenly across the months it covers, and feeds P&L Entry's Insurance Charges automatically.</p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="field" style={{ flex: '1 1 200px' }}>
+            <label>Vehicle</label>
+            <select value={form.vehicleId} onChange={e => setForm({ ...form, vehicleId: e.target.value })}>
+              <option value="">Select vehicle…</option>
+              {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
+            </select>
+          </div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Premium Amount ({currency})</label><input type="number" value={form.premiumAmount} onChange={e => setForm({ ...form, premiumAmount: e.target.value })} placeholder="16500" /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Start Date</label><input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>End Date</label><input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button className="btn primary" onClick={savePolicy}>{editId ? 'Update Policy' : '+ Add Policy'}</button>
+          {editId && <button className="btn" onClick={() => { setEditId(null); setForm(emptyForm); }}>Cancel</button>}
+        </div>
+      </div>
+      <div className="panel">
+        <h3>All Policies ({policies.length})</h3>
+        <table>
+          <thead><tr><th>Vehicle</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
+          <tbody>
+            {sorted.map(p => (
+              <tr key={p.id}>
+                <td>{vehicleName(p.vehicleId)}</td>
+                <td className="num">{fmt(p.premiumAmount, currency)}</td>
+                <td>{p.startDate}</td>
+                <td>{p.endDate}</td>
+                <td className="num">{monthsCovered(p)}</td>
+                <td className="num">{fmt(num(p.premiumAmount) / (monthsCovered(p) || 1), currency)}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button className="icon-btn" onClick={() => editPolicy(p)}>✎</button>{' '}
+                  <button className="icon-btn" onClick={() => deletePolicy(p)}>✕</button>
+                </td>
+              </tr>
+            ))}
+            {policies.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No insurance policies added yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function NotesPanel({ notes, setNotes, deletePin }) {
+  const [text, setText] = useState('');
+
+  function addNote() {
+    if (!text.trim()) return;
+    setNotes([{ id: uid('note'), text: text.trim(), date: todayStr(), time: new Date().toLocaleTimeString() }, ...notes]);
+    setText('');
+  }
+  function deleteNote(n) {
+    if (!confirmDelete('this note', deletePin)) return;
+    setNotes(notes.filter(x => x.id !== n.id));
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Add Note</h3>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={3}
+          placeholder="Anything important not tied to a specific month or report — a reminder, an observation, a decision made…"
+          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+        <button className="btn primary" style={{ marginTop: 8 }} onClick={addNote}>+ Add Note</button>
+      </div>
+      <div className="panel">
+        <h3>Notes Log ({notes.length})</h3>
+        {notes.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>No notes yet.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {notes.map(n => (
+              <div key={n.id} style={{ borderBottom: '1px solid var(--line)', paddingBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 3 }}>{n.date} · {n.time}</div>
+                  <div style={{ fontSize: 13.5, whiteSpace: 'pre-wrap' }}>{n.text}</div>
+                </div>
+                <button className="icon-btn" onClick={() => deleteNote(n)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUrl, year, setYear, currency, setCurrency, baseDays, setBaseDays, deletePin, setDeletePin, onDownloadBackup, onRestoreBackup, onResetLineItems, onReorderLineItems, onClearPnl, onClearOccupancy, users, setUsers }) {
   const [pinInput, setPinInput] = useState(deletePin);
   const [logoError, setLogoError] = useState('');
+  const [newUserForm, setNewUserForm] = useState({ name: '', password: '', role: 'viewer' });
+  const [editUserId, setEditUserId] = useState(null);
+
+  function saveUser() {
+    if (!newUserForm.name.trim() || !newUserForm.password.trim()) { window.alert('Name and password are both required.'); return; }
+    if (editUserId) {
+      setUsers(users.map(u => u.id === editUserId ? { ...u, ...newUserForm } : u));
+      setEditUserId(null);
+    } else {
+      if (users.some(u => u.name === newUserForm.name)) { window.alert('A user with that name already exists.'); return; }
+      setUsers([...users, { id: uid('user'), ...newUserForm }]);
+    }
+    setNewUserForm({ name: '', password: '', role: 'viewer' });
+  }
+  function editUser(u) { setEditUserId(u.id); setNewUserForm({ name: u.name, password: u.password, role: u.role }); }
+  function deleteUser(u, deletePinVal) { if (!confirmDelete(`user "${u.name}"`, deletePinVal)) return; setUsers(users.filter(x => x.id !== u.id)); }
 
   function handleLogoUpload(file) {
     setLogoError('');
@@ -2664,6 +4245,7 @@ function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUr
   }
 
   return (
+    <>
     <div className="panel" style={{ maxWidth: 520 }}>
       <h3>Report Settings</h3>
       <div className="field" style={{ marginBottom: 12 }}><label>Company Name (shown on all reports)</label><input value={companyName} onChange={e => setCompanyName(e.target.value)} /></div>
@@ -2717,6 +4299,43 @@ function SettingsPanel({ companyName, setCompanyName, logoDataUrl, setLogoDataUr
         <button className="btn danger" onClick={onClearOccupancy}>Clear All Occupancy Entries</button>
       </div>
     </div>
+
+    <div className="panel" style={{ maxWidth: 520 }}>
+      <h3>User Management</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Create logins for your team with a specific role. Admin: full access. Manager: day-to-day operational tabs only, no Settings/Financing/Feasibility. Viewer: read-only, sees reports only.</p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="field" style={{ flex: '1 1 140px' }}><label>Name</label><input value={newUserForm.name} onChange={e => setNewUserForm({ ...newUserForm, name: e.target.value })} /></div>
+        <div className="field" style={{ flex: '1 1 140px' }}><label>Password</label><input value={newUserForm.password} onChange={e => setNewUserForm({ ...newUserForm, password: e.target.value })} /></div>
+        <div className="field" style={{ flex: '1 1 120px' }}><label>Role</label>
+          <select value={newUserForm.role} onChange={e => setNewUserForm({ ...newUserForm, role: e.target.value })}>
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button className="btn primary" onClick={saveUser}>{editUserId ? 'Update User' : '+ Add User'}</button>
+        {editUserId && <button className="btn" onClick={() => { setEditUserId(null); setNewUserForm({ name: '', password: '', role: 'viewer' }); }}>Cancel</button>}
+      </div>
+      <table style={{ marginTop: 14 }}>
+        <thead><tr><th>Name</th><th>Role</th><th></th></tr></thead>
+        <tbody>
+          {users.map(u => (
+            <tr key={u.id}>
+              <td>{u.name}</td>
+              <td><span className="badge" style={{ background: u.role === 'admin' ? '#EFF4F1' : u.role === 'manager' ? '#FFF6E8' : '#F2F3F0', color: u.role === 'admin' ? 'var(--green)' : u.role === 'manager' ? 'var(--amber)' : 'var(--muted)' }}>{u.role}</span></td>
+              <td style={{ textAlign: 'right' }}>
+                <button className="icon-btn" onClick={() => editUser(u)}>✎</button>{' '}
+                <button className="icon-btn" onClick={() => deleteUser(u, deletePin)}>✕</button>
+              </td>
+            </tr>
+          ))}
+          {users.length === 0 && <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>No additional users yet — just the primary Admin (site password).</td></tr>}
+        </tbody>
+      </table>
+    </div>
+    </>
   );
 }
 
@@ -3010,9 +4629,110 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
 
 /* ---------------- Quick Review (executive one-page summary) ---------------- */
 
-function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, vehicleRevenue, defaultUsefulLife, occupancy, baseDays, widgets, setWidgets, overdueLoans, setActiveTab }) {
+  const [customizing, setCustomizing] = useState(false);
   const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
   const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
+  const roiRows = vehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }));
+  const topModels = roiRows.slice().sort((a, b) => (b.stats.coverage ?? -1) - (a.stats.coverage ?? -1)).slice(0, 5);
+
+  const WIDGET_LABELS = { netProfit: 'Net Profit / Loss', totalRevenue: 'Total Revenue', occupancy: 'Fleet Occupancy', topModels: 'Top Performing Models', budgetVsActual: 'Budget vs Actual Chart', alerts: 'Alerts (Payment Due, etc.)' };
+
+  return (
+    <div>
+      <div className="panel" style={{ background: 'linear-gradient(135deg,#161B26,#2D6E8E)', border: 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            {logoDataUrl && <img src={logoDataUrl} alt="logo" style={{ height: 'auto', width: 'auto', maxHeight: '9vw', minHeight: 28, maxWidth: '30%', objectFit: 'contain', marginBottom: 8, background: '#fff', borderRadius: 6, padding: 4, display: 'block' }} />}
+            <h1 style={{ fontSize: 20, color: '#fff', margin: 0 }}>{companyName}</h1>
+            <p style={{ color: 'rgba(255,255,255,0.75)', margin: '4px 0 0 0', fontSize: 13 }}>Dashboard — {periodLabel}</p>
+          </div>
+          <button className="btn small no-print" onClick={() => setCustomizing(!customizing)}>{customizing ? 'Done' : '⚙ Customize'}</button>
+        </div>
+      </div>
+
+      {customizing && (
+        <div className="panel no-print">
+          <h3>Choose Widgets</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {Object.keys(WIDGET_LABELS).map(key => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5 }}>
+                <input type="checkbox" checked={!!widgets[key]} onChange={e => setWidgets({ ...widgets, [key]: e.target.checked })} />
+                {WIDGET_LABELS[key]}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {widgets.alerts && overdueLoans.length > 0 && (
+        <div className="panel" style={{ borderLeft: '4px solid var(--red)' }}>
+          <h3 style={{ color: 'var(--red)' }}>⚠ {overdueLoans.length} Loan{overdueLoans.length > 1 ? 's' : ''} Overdue</h3>
+          <button className="btn small" onClick={() => setActiveTab('financing')}>Review in Vehicle Financing</button>
+        </div>
+      )}
+
+      <div className="kpi-row">
+        {widgets.netProfit && (
+          <div className="kpi-card" style={{ borderLeft: '4px solid ' + (qr.totals.netprofit_actual >= 0 ? '#1E5AA8' : '#C1503F') }}>
+            <div className="label">Net Profit / Loss</div>
+            <div className="value mono" style={{ fontSize: 24, fontWeight: 700, color: qr.totals.netprofit_actual >= 0 ? '#1E5AA8' : '#C1503F' }}>{fmt(qr.totals.netprofit_actual, currency)}</div>
+            <div className="sub" style={{ color: 'var(--muted)' }}>vs budget {fmt(qr.totals.netprofit_budget, currency)}</div>
+          </div>
+        )}
+        {widgets.totalRevenue && (
+          <div className="kpi-card">
+            <div className="label">Total Revenue</div>
+            <div className="value mono" style={{ fontSize: 22 }}>{fmt(qr.totals.income_actual, currency)}</div>
+            <div className={`sub ${qr.incomeVariance.favorable ? 'pos' : 'neg'}`}>{qr.incomeVariance.pct === null ? '—' : pctStr(qr.incomeVariance.pct)} vs budget</div>
+          </div>
+        )}
+        {widgets.occupancy && (
+          <div className="kpi-card">
+            <div className="label">Avg Fleet Occupancy</div>
+            <div className="value mono" style={{ fontSize: 22 }}>{pctStr(qr.fleetAvgOcc)}</div>
+            <div className="sub" style={{ color: 'var(--muted)' }}>{qr.above50}/{qr.totalWithData} above 50%</div>
+          </div>
+        )}
+      </div>
+
+      {widgets.budgetVsActual && (
+        <div className="panel">
+          <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
+          <GroupedBarChart data={[
+            { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
+            { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
+            { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
+            { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
+          ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
+        </div>
+      )}
+
+      {widgets.topModels && topModels.length > 0 && (
+        <div className="panel">
+          <h3>Top Performing Models</h3>
+          <HBarList data={topModels.map(r => ({ name: r.vehicle.name, value: Math.round((r.stats.coverage || 0) * 100), display: r.stats.coverage === null ? 'No Benchmark' : pctStr(r.stats.coverage), color: (r.stats.coverage || 0) >= 1 ? '#3E9C6E' : (r.stats.coverage || 0) >= 0.8 ? '#D98E3F' : '#C1503F' }))} maxVal={100} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays, reportFrom, setReportFrom, reportTo, setReportTo }) {
+  const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
+  const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
+  const isSingleMonth = rangeMonths.length <= 1;
+
+  function jumpToSingleMonth(period) {
+    setReportFrom(period);
+    setReportTo(period);
+  }
+  function shiftMonth(delta) {
+    const anchor = rangeMonths[0] || reportFrom;
+    const [y, m] = anchor.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    jumpToSingleMonth(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  }
 
   if (rangeMonths.length === 0) return <div className="empty-state"><h2>No period selected</h2><p>Pick a Report From / Report To range at the top of the app.</p></div>;
 
@@ -3024,10 +4744,19 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
         <p style={{ color: 'rgba(255,255,255,0.75)', margin: '4px 0 0 0', fontSize: 13 }}>{periodLabel} Performance Dashboard</p>
       </div>
 
+      <div className="panel no-print" style={{ textAlign: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+          <button className="btn" onClick={() => shiftMonth(-1)} title="Previous month">◀ Back</button>
+          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--navy)', minWidth: 160 }}>{periodLabel}</div>
+          <button className="btn" onClick={() => shiftMonth(1)} title="Next month">Next ▶</button>
+        </div>
+        {!isSingleMonth && <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>Currently viewing a multi-month range — Next/Back here jumps to a single month. Use Report From/To at the top for a custom range.</p>}
+      </div>
+
       <div className="kpi-row">
-        <div className="kpi-card" style={{ borderLeft: '4px solid ' + (qr.totals.netprofit_actual >= 0 ? '#3E9C6E' : '#C1503F') }}>
+        <div className="kpi-card" style={{ borderLeft: '4px solid ' + (qr.totals.netprofit_actual >= 0 ? '#1E5AA8' : '#C1503F') }}>
           <div className="label">Net Profit / Loss</div>
-          <div className="value mono" style={{ fontSize: 24, color: qr.totals.netprofit_actual >= 0 ? '#3E9C6E' : '#C1503F' }}>{fmt(qr.totals.netprofit_actual, currency)}</div>
+          <div className="value mono" style={{ fontSize: 24, fontWeight: 700, color: qr.totals.netprofit_actual >= 0 ? '#1E5AA8' : '#C1503F' }}>{fmt(qr.totals.netprofit_actual, currency)}</div>
           <div className="sub" style={{ color: 'var(--muted)' }}>vs budget {fmt(qr.totals.netprofit_budget, currency)}</div>
         </div>
         <div className="kpi-card">
@@ -3042,51 +4771,47 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
         </div>
       </div>
 
-      <div className="grid-2">
-        <div className="panel">
-          <h3>Budget vs Actual</h3>
-          <table>
-            <thead><tr><th>Category</th><th className="num">Budget</th><th className="num">Actual</th><th>Variance</th></tr></thead>
-            <tbody>
-              <tr>
-                <td>Total Revenue</td><td className="num">{fmt(qr.totals.income_budget, currency)}</td><td className="num">{fmt(qr.totals.income_actual, currency)}</td>
-                <td><span className={`badge ${qr.incomeVariance.favorable ? 'pos' : 'neg'}`}>{qr.incomeVariance.pct === null ? '—' : pctStr(qr.incomeVariance.pct)} {qr.incomeVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
-              </tr>
-              <tr className="totalexp-row">
-                <td>Total Expenses (Direct+Indirect+Bank)</td><td className="num">{fmt(qr.totals.totalexp_budget, currency)}</td><td className="num">{fmt(qr.totals.totalexp_actual, currency)}</td>
-                {(() => { const v = rowVariance(qr.totals.totalexp_budget, qr.totals.totalexp_actual, 'expense'); return <td><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)} {v.favorable ? 'Favorable' : 'Deficit'}</span></td>; })()}
-              </tr>
-              <tr className="subtotal-row">
-                <td>Gross Profit</td><td className="num">{fmt(qr.totals.gross_budget, currency)}</td><td className="num">{fmt(qr.totals.gross_actual, currency)}</td>
-                {(() => { const v = rowVariance(qr.totals.gross_budget, qr.totals.gross_actual, 'income'); return <td><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)} {v.favorable ? 'Favorable' : 'Deficit'}</span></td>; })()}
-              </tr>
-              <tr className="net-row">
-                <td>Net Profit / Loss</td><td className="num">{fmt(qr.totals.netprofit_budget, currency)}</td><td className="num">{fmt(qr.totals.netprofit_actual, currency)}</td>
-                <td><span className={`badge ${qr.netVariance.favorable ? 'pos' : 'neg'}`}>{qr.netVariance.pct === null ? '—' : pctStr(qr.netVariance.pct)} {qr.netVariance.favorable ? 'Favorable' : 'Deficit'}</span></td>
-              </tr>
-            </tbody>
-          </table>
-          {qr.topRevenue && qr.topRevenue.value > 0 && (
-            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 12 }}>
-              <b>{qr.topRevenue.label}</b> was the largest income contributor this period at {pctStr(qr.topRevenueSharePct)} of total income{qr.netVariance.favorable ? ' — a key driver of the favorable variance.' : '.'}
-            </p>
-          )}
+      <div className="panel">
+        <h3 style={{ fontSize: 15 }}>Budget vs Actual</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginTop: 6 }}>
+          {[
+            { label: 'Total Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual, v: qr.incomeVariance, big: false },
+            { label: 'Total Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual, v: rowVariance(qr.totals.totalexp_budget, qr.totals.totalexp_actual, 'expense'), big: false },
+            { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual, v: rowVariance(qr.totals.gross_budget, qr.totals.gross_actual, 'income'), big: false },
+            { label: 'Net Profit / Loss', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual, v: qr.netVariance, big: true },
+          ].map((row, i) => (
+            <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '16px 18px', background: row.big ? '#F7FAF8' : '#fff' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 600 }}>{row.label}</div>
+              <div className="mono" style={{ fontSize: row.big ? 30 : 24, fontWeight: 700, marginTop: 6, color: row.label === 'Net Profit / Loss' ? (row.actual >= 0 ? '#1E5AA8' : '#C1503F') : 'var(--ink)' }}>{fmt(row.actual, currency)}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 3 }}>Budget: {fmt(row.budget, currency)}</div>
+              <div style={{ marginTop: 8 }}>
+                <span className={`badge ${row.v.favorable ? 'pos' : 'neg'}`} style={{ fontSize: 12.5, padding: '4px 10px' }}>{row.v.pct === null ? '—' : pctStr(row.v.pct)} {row.v.favorable ? 'Favorable' : 'Deficit'}</span>
+              </div>
+            </div>
+          ))}
         </div>
+        {qr.topRevenue && qr.topRevenue.value > 0 && (
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 16 }}>
+            <b>{qr.topRevenue.label}</b> was the largest income contributor this period at {pctStr(qr.topRevenueSharePct)} of total income{qr.netVariance.favorable ? ' — a key driver of the favorable variance.' : '.'}
+          </p>
+        )}
+      </div>
+
+      <div className="grid-2">
         <div className="panel" style={{ textAlign: 'center' }}>
           <h3>Fleet Occupancy</h3>
           <DonutGauge pct={qr.fleetAvgOcc} color={qr.fleetAvgOcc >= 0.5 ? '#3E9C6E' : '#C1503F'} />
           <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>{qr.totalWithData} vehicles with logged data this period</p>
         </div>
-      </div>
-
-      <div className="panel">
-        <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
-        <GroupedBarChart data={[
-          { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
-          { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
-          { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
-          { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
-        ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
+        <div className="panel">
+          <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
+          <GroupedBarChart data={[
+            { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
+            { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
+            { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
+            { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
+          ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
+        </div>
       </div>
 
       <div className="panel">
@@ -3132,7 +4857,7 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
         <KpiCard label="Total Income" value={fmt(totals.income_actual, currency)} sub={`Budget ${fmt(totals.income_budget, currency)}`} diff={totals.income_actual - totals.income_budget} />
         <KpiCard label="Gross Profit" value={fmt(totals.gross_actual, currency)} sub={`Budget ${fmt(totals.gross_budget, currency)}`} diff={totals.gross_actual - totals.gross_budget} />
         <KpiCard label="EBITDA" value={fmt(totals.ebitda_actual, currency)} sub={`Budget ${fmt(totals.ebitda_budget, currency)}`} diff={totals.ebitda_actual - totals.ebitda_budget} />
-        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} />
+        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} rawValue={totals.netprofit_actual} signColor />
       </div>
 
       <div className="panel">
