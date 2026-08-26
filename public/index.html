@@ -1630,12 +1630,12 @@ function App() {
           {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} period={pnlEntryPeriod} setPeriod={setPnlEntryPeriod} monthlyRemarks={monthlyRemarks} setMonthlyRemarks={setMonthlyRemarks} insurancePolicies={insurancePolicies} insuranceOverrides={insuranceOverrides} setInsuranceOverrides={setInsuranceOverrides} />}
           {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} />}
           {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
-          {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />}
+          {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
-          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} />}
+          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} currency={currency} />}
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
-          {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} />}
+          {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} onPrintStudy={handlePrintFeasibilityStudy} />}
           {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} onSelectOnlyLoan={selectOnlyLoan} />}
           {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
@@ -1841,6 +1841,32 @@ function MonthNavigator({ period, setPeriod }) {
         <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ marginTop: 4 }} />
       </div>
       <button className="btn" onClick={() => shift(1)} title="Next month">Next ▶</button>
+    </div>
+  );
+}
+
+// Same Next/Back stepping pattern as MonthNavigator, but for report screens driven by the
+// global Report From/To range — Next/Back jumps the whole report to a single adjacent
+// month instead of requiring the range fields to be retyped by hand.
+function PeriodNavigator({ rangeMonths, reportFrom, setReportFrom, reportTo, setReportTo }) {
+  const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
+  const isSingleMonth = rangeMonths.length <= 1;
+  function shiftMonth(delta) {
+    const anchor = rangeMonths[0] || reportFrom;
+    const [y, m] = anchor.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    const next = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    setReportFrom(next);
+    setReportTo(next);
+  }
+  return (
+    <div className="panel no-print" style={{ textAlign: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <button className="btn" onClick={() => shiftMonth(-1)} title="Previous month">◀ Back</button>
+        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--navy)', minWidth: 160 }}>{periodLabel}</div>
+        <button className="btn" onClick={() => shiftMonth(1)} title="Next month">Next ▶</button>
+      </div>
+      {!isSingleMonth && <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>Currently viewing a multi-month range — Next/Back here jumps to a single month. Use Report From/To at the top for a custom range.</p>}
     </div>
   );
 }
@@ -2275,7 +2301,7 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
 
 /* ---------------- P&L Compare (uses global report range) ---------------- */
 
-function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
+function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const yearData = monthKeys.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
 
   const allRows = useMemo(() => {
@@ -2314,6 +2340,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency }) {
 
   return (
     <div>
+      {setReportFrom && <PeriodNavigator rangeMonths={monthKeys} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
       <div className="grid-2">
         <div className="panel">
           <h3>Income &amp; Net Profit Trend</h3>
@@ -2466,7 +2493,7 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
 
 /* ---------------- Occupancy Report (uses global report range) ---------------- */
 
-function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, currency, vehicleRevenue, selectedVehicleIds, onToggleVehicleSelect, onSelectAllVehicles }) {
+function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, currency, vehicleRevenue, selectedVehicleIds, onToggleVehicleSelect, onSelectAllVehicles, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const displayVehicles = selectedVehicleIds && selectedVehicleIds.length ? vehicles.filter(v => selectedVehicleIds.includes(v.id)) : vehicles;
   const rows = displayVehicles.map(v => {
     const monthPcts = monthKeys.map(p => { const d = (occupancy[p] || {})[v.id]; return d === undefined || d === '' ? null : num(d) / baseDays; });
@@ -2501,6 +2528,21 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
     return point;
   });
 
+  // Per-vehicle Days/Income figures, computed once and reused for both the summary KPIs
+  // and the by-vehicle table below, so the grand total row always matches the KPI cards.
+  const vehicleIncomeRows = vehicleRevenue ? rows.map(r => {
+    let days = 0, income = 0;
+    monthKeys.forEach(p => {
+      const d = (occupancy[p] || {})[r.vehicle.id];
+      if (d !== undefined && d !== '') days += num(d);
+      income += num((vehicleRevenue[p] || {})[r.vehicle.id]);
+    });
+    return { ...r, days, income, avgRate: days ? income / days : 0 };
+  }) : [];
+  const totalDays = vehicleIncomeRows.reduce((s, r) => s + r.days, 0);
+  const totalIncome = vehicleIncomeRows.reduce((s, r) => s + r.income, 0);
+  const fleetPerDay = totalDays ? totalIncome / totalDays : 0;
+
   if (vehicles.length === 0) return <div className="empty-state"><h2>No vehicles yet</h2><p>Add your fleet in the Vehicles tab, then log occupancy days.</p></div>;
 
   return (
@@ -2516,10 +2558,51 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
           </div>
         </div>
       )}
+
+      {setReportFrom && <PeriodNavigator rangeMonths={monthKeys} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
+
       <div className="kpi-row">
         <KpiCard label="Fleet Avg Occupancy" value={pctStr(fleetAvg)} sub={`base ${baseDays} days/month`} diff={fleetAvg - 0.5} />
         <div className="kpi-card"><div className="label">Vehicles Below 50%</div><div className="value mono" style={{ color: 'var(--red)' }}>{rows.filter(r => r.avg !== null && r.avg < 0.5).length}</div></div>
       </div>
+
+      {vehicleRevenue && (
+        <div className="panel">
+          <h3>Income vs Occupancy</h3>
+          <div className="kpi-row">
+            <div className="kpi-card"><div className="label">Total Occupied Days</div><div className="value mono">{totalDays}</div></div>
+            <div className="kpi-card"><div className="label">Total Income (fleet)</div><div className="value mono">{fmt(totalIncome, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Revenue per Occupied Day</div><div className="value mono">{fmt(fleetPerDay, currency)}</div></div>
+          </div>
+        </div>
+      )}
+
+      {vehicleRevenue && (
+        <div className="panel" style={{ overflowX: 'auto' }}>
+          <h3>Occupancy &amp; Income by Vehicle</h3>
+          <table>
+            <thead><tr><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
+            <tbody>
+              {vehicleIncomeRows.map(r => (
+                <tr key={r.vehicle.id}>
+                  <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                  <td className="num">{r.days}</td>
+                  <td className="num">{r.avg === null ? '—' : pctStr(r.avg)}</td>
+                  <td className="num">{fmt(r.income, currency)}</td>
+                  <td className="num">{r.avgRate ? fmt(r.avgRate, currency) : '—'}</td>
+                </tr>
+              ))}
+              <tr className="subtotal-row">
+                <td colSpan={2}>Fleet Total</td>
+                <td className="num">{totalDays}</td>
+                <td className="num">{pctStr(fleetAvg)}</td>
+                <td className="num">{fmt(totalIncome, currency)}</td>
+                <td className="num">{fleetPerDay ? fmt(fleetPerDay, currency) : '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="panel">
         <h3>Occupancy by Category — Trend</h3>
@@ -2558,57 +2641,6 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
           ))}
         </div>
       </div>
-
-      {vehicleRevenue && (() => {
-        let totalDays = 0, totalIncome = 0;
-        rows.forEach(r => {
-          monthKeys.forEach(p => {
-            const d = (occupancy[p] || {})[r.vehicle.id];
-            if (d !== undefined && d !== '') totalDays += num(d);
-            totalIncome += num((vehicleRevenue[p] || {})[r.vehicle.id]);
-          });
-        });
-        const perDay = totalDays ? totalIncome / totalDays : 0;
-        return (
-          <div className="panel">
-            <h3>Income vs Occupancy</h3>
-            <div className="kpi-row">
-              <div className="kpi-card"><div className="label">Total Occupied Days</div><div className="value mono">{totalDays}</div></div>
-              <div className="kpi-card"><div className="label">Total Income (fleet)</div><div className="value mono">{fmt(totalIncome, currency)}</div></div>
-              <div className="kpi-card"><div className="label">Revenue per Occupied Day</div><div className="value mono">{fmt(perDay, currency)}</div></div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {vehicleRevenue && (
-        <div className="panel" style={{ overflowX: 'auto' }}>
-          <h3>Occupancy &amp; Income by Vehicle</h3>
-          <table>
-            <thead><tr><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
-            <tbody>
-              {rows.map(r => {
-                let days = 0, income = 0;
-                monthKeys.forEach(p => {
-                  const d = (occupancy[p] || {})[r.vehicle.id];
-                  if (d !== undefined && d !== '') days += num(d);
-                  income += num((vehicleRevenue[p] || {})[r.vehicle.id]);
-                });
-                const avgRate = days ? income / days : 0;
-                return (
-                  <tr key={r.vehicle.id}>
-                    <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
-                    <td className="num">{days}</td>
-                    <td className="num">{r.avg === null ? '—' : pctStr(r.avg)}</td>
-                    <td className="num">{fmt(income, currency)}</td>
-                    <td className="num">{avgRate ? fmt(avgRate, currency) : '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
 
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Occupancy Matrix</h3>
@@ -2695,7 +2727,7 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
 
 /* ---------------- Model Comparison & ROI ---------------- */
 
-function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency }) {
+function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const [groupBy, setGroupBy] = useState('model'); // 'model' | 'category'
   const [selectedIds, setSelectedIds] = useState([]); // empty = all vehicles included
   function toggleSelect(id) {
@@ -2748,6 +2780,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
           ))}
         </div>
       </div>
+      {setReportFrom && <PeriodNavigator rangeMonths={rangeMonths} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
       <div className="panel">
         <h3>Useful Life Assumption</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Applied to every vehicle unless it has its own Useful Life Override set in the Vehicles tab. Required monthly income = Purchase Value ÷ (Useful Life × 12).</p>
@@ -4958,18 +4991,6 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
 function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
   const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
-  const isSingleMonth = rangeMonths.length <= 1;
-
-  function jumpToSingleMonth(period) {
-    setReportFrom(period);
-    setReportTo(period);
-  }
-  function shiftMonth(delta) {
-    const anchor = rangeMonths[0] || reportFrom;
-    const [y, m] = anchor.split('-').map(Number);
-    const d = new Date(y, m - 1 + delta, 1);
-    jumpToSingleMonth(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
-  }
 
   if (rangeMonths.length === 0) return <div className="empty-state"><h2>No period selected</h2><p>Pick a Report From / Report To range at the top of the app.</p></div>;
 
@@ -4981,14 +5002,7 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
         <p style={{ color: 'rgba(255,255,255,0.75)', margin: '4px 0 0 0', fontSize: 13 }}>{periodLabel} Performance Dashboard</p>
       </div>
 
-      <div className="panel no-print" style={{ textAlign: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-          <button className="btn" onClick={() => shiftMonth(-1)} title="Previous month">◀ Back</button>
-          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--navy)', minWidth: 160 }}>{periodLabel}</div>
-          <button className="btn" onClick={() => shiftMonth(1)} title="Next month">Next ▶</button>
-        </div>
-        {!isSingleMonth && <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>Currently viewing a multi-month range — Next/Back here jumps to a single month. Use Report From/To at the top for a custom range.</p>}
-      </div>
+      <PeriodNavigator rangeMonths={rangeMonths} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />
 
       <div className="kpi-row">
         <div className="kpi-card" style={{ borderLeft: '4px solid ' + (qr.totals.netprofit_actual >= 0 ? '#1E5AA8' : '#C1503F') }}>
