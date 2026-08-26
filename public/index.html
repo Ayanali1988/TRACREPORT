@@ -288,7 +288,7 @@ function vehicleExpiryAlerts(vehicles, insurancePolicies, today) {
 }
 
 function agreementEffectiveEnd(agreement) {
-  if (agreement.status === 'closed' && agreement.closeDate) return agreement.closeDate;
+  if ((agreement.status === 'closed' || agreement.status === 'replaced') && agreement.closeDate) return agreement.closeDate;
   return todayStr(); // still open: provisional, counted through today
 }
 
@@ -336,6 +336,7 @@ function agreementMonthsSpanned(agreement) {
 function aggregateAgreements(agreements, vehicles) {
   const out = {};
   (agreements || []).forEach(a => {
+    if (a.status === 'void') return; // voided agreements are fully excluded from all totals
     const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
     if (!vehicle) return; // Sub-Lease / unmatched — excluded from fleet totals
     const totalDays = agreementTotalDays(a);
@@ -3968,8 +3969,19 @@ function emptyAgreement() {
     id: uid('agr'), raNumber: '', plate: '', vehicleId: '', customerName: '',
     type: 'daily', startDate: todayStr(), closeDate: '', status: 'open',
     rate: '', daysOverride: '', revenueOverride: '',
-    replacementPlate: '', notes: '',
+    replacementPlate: '', notes: '', parentRaNumber: '',
   };
+}
+
+// Given a base RA# (e.g. "15706"), finds the next replacement-chain letter suffix by
+// checking which of -A, -B, -C… already exist among the current agreements.
+function nextReplacementSuffix(baseRaNumber, agreements) {
+  const used = agreements.filter(a => a.parentRaNumber === baseRaNumber).map(a => (a.raNumber || '').slice(baseRaNumber.length + 1));
+  for (let i = 0; i < 26; i++) {
+    const letter = String.fromCharCode(65 + i);
+    if (!used.includes(letter)) return letter;
+  }
+  return 'X';
 }
 
 function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin }) {
@@ -3994,7 +4006,8 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     if (!form.plate || !form.startDate || !form.rate) { window.alert('Vehicle Plate, Start Date, and Rate are all required.'); return; }
     const conflict = plateStatus(form.plate);
     if (conflict) {
-      if (!window.confirm(`Warning: "${form.plate}" already has an open agreement (RA# ${conflict.raNumber || conflict.id}). This vehicle may already be out. Add this new agreement anyway?`)) return;
+      window.alert(`Cannot add: "${form.plate}" already has an open agreement (RA# ${conflict.raNumber || conflict.id}). Close or resolve that agreement first before opening a new one for the same vehicle.`);
+      return;
     }
     const vehicle = findVehicleByPlate(vehicles, form.plate);
     setAgreements([...agreements, { ...form, vehicleId: vehicle ? vehicle.id : '' }]);
@@ -4040,25 +4053,77 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     setAgreements(agreements.filter(x => x.id !== a.id));
   }
 
+  // Vehicle Replacement: closes the current agreement leg as of the swap date, and opens a
+  // linked "-A"/"-B"… sub-agreement for the new vehicle, so occupancy/income for each car
+  // is tracked precisely for the days it was actually the one in use.
+  const [replacingId, setReplacingId] = useState(null);
+  const [replaceDateInput, setReplaceDateInput] = useState(todayStr());
+  const [replacePlateInput, setReplacePlateInput] = useState('');
+  const [replaceRateInput, setReplaceRateInput] = useState('');
+  function openReplaceModal(a) {
+    setReplacingId(a.id);
+    setReplaceDateInput(todayStr());
+    setReplacePlateInput('');
+    setReplaceRateInput(a.rate);
+  }
+  const replacingAgreement = agreements.find(a => a.id === replacingId);
+  function confirmReplace() {
+    if (!replacePlateInput) { window.alert('Enter the replacement vehicle plate.'); return; }
+    const conflict = plateStatus(replacePlateInput);
+    if (conflict) { window.alert(`Cannot replace: "${replacePlateInput}" already has an open agreement (RA# ${conflict.raNumber || conflict.id}). Resolve that first.`); return; }
+    const baseRa = replacingAgreement.parentRaNumber || replacingAgreement.raNumber || replacingAgreement.id;
+    const suffix = nextReplacementSuffix(baseRa, agreements);
+    const newVehicle = findVehicleByPlate(vehicles, replacePlateInput);
+    const subAgreement = {
+      id: uid('agr'), raNumber: `${baseRa}-${suffix}`, parentRaNumber: baseRa,
+      plate: replacePlateInput, vehicleId: newVehicle ? newVehicle.id : '',
+      customerName: replacingAgreement.customerName, type: replacingAgreement.type,
+      startDate: replaceDateInput, closeDate: '', status: 'open',
+      rate: replaceRateInput !== '' ? replaceRateInput : replacingAgreement.rate,
+      daysOverride: '', revenueOverride: '', replacementPlate: '', notes: `Replacement for ${replacingAgreement.raNumber || replacingAgreement.id}`,
+    };
+    setAgreements(agreements.map(a => a.id === replacingId ? { ...a, status: 'replaced', closeDate: replaceDateInput } : a).concat(subAgreement));
+    setReplacingId(null);
+  }
+
   function parseBulk() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
-    const parsed = lines.map(line => {
+    let added = 0, updated = 0, conflicts = [];
+    let next = [...agreements];
+    lines.forEach(line => {
       const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
       const [raNumber, plate, type, startDate, endDateOrStatus, rate, status] = cols;
+      if (!plate) return;
       const isClosedHint = (endDateOrStatus || '').toLowerCase().includes('close') || (status || '').toLowerCase().includes('close');
       const vehicle = findVehicleByPlate(vehicles, plate);
-      return {
-        id: uid('agr'), raNumber: raNumber || '', plate: plate || '', vehicleId: vehicle ? vehicle.id : '',
+      const parsedAgreement = {
+        raNumber: raNumber || '', plate, vehicleId: vehicle ? vehicle.id : '',
         type: (type || '').toLowerCase().includes('month') ? 'monthly' : 'daily',
         startDate: parseFlexibleDate(startDate) || todayStr(),
         closeDate: isClosedHint && endDateOrStatus && !endDateOrStatus.toLowerCase().includes('close') ? parseFlexibleDate(endDateOrStatus) : '',
         status: isClosedHint ? 'closed' : 'open',
-        rate: rate || '0', daysOverride: '', revenueOverride: '', replacementPlate: '', notes: '',
+        rate: rate || '0',
       };
-    }).filter(a => a.plate);
-    setAgreements([...agreements, ...parsed]);
+      // Dedup: if this RA# already exists, update it in place rather than adding a duplicate.
+      const existingIdx = raNumber ? next.findIndex(a => a.raNumber === raNumber) : -1;
+      if (existingIdx >= 0) {
+        next[existingIdx] = { ...next[existingIdx], ...parsedAgreement, daysOverride: next[existingIdx].daysOverride, revenueOverride: next[existingIdx].revenueOverride };
+        updated++;
+        return;
+      }
+      // Double-booking check: skip (don't import) any new Open agreement for a plate that's
+      // already open elsewhere, and flag it for the user to resolve manually.
+      if (parsedAgreement.status === 'open') {
+        const conflict = next.find(a => a.status === 'open' && (a.plate || '').trim().toLowerCase() === plate.trim().toLowerCase());
+        if (conflict) { conflicts.push(`${raNumber || '(no RA#)'} — ${plate} already open under RA# ${conflict.raNumber || conflict.id}`); return; }
+      }
+      next.push({ ...emptyAgreement(), ...parsedAgreement, daysOverride: '', revenueOverride: '', replacementPlate: '', notes: '', customerName: '', parentRaNumber: '' });
+      added++;
+    });
+    setAgreements(next);
     setBulkText('');
     setView('all');
+    window.alert(`Import complete: ${added} added, ${updated} updated (matched by RA#).${conflicts.length ? `\n\nSkipped ${conflicts.length} due to a vehicle already being open elsewhere — resolve and re-paste these:\n` + conflicts.join('\n') : ''}`);
   }
 
   const openAgreements = agreements.filter(a => a.status === 'open');
@@ -4082,6 +4147,26 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <button className="btn primary" onClick={confirmClose}>Confirm Close</button>
               <button className="btn" onClick={() => setClosingId(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {replacingId && replacingAgreement && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setReplacingId(null)}>
+          <div className="panel" style={{ width: 440, background: '#fff' }} onClick={e => e.stopPropagation()}>
+            <h3>Replace Vehicle — {replacingAgreement.raNumber || replacingAgreement.plate}</h3>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Closes {replacingAgreement.plate} as of the replacement date, and opens a new linked agreement for the replacement car — same customer, tracked independently from here.</p>
+            <div className="field"><label>Replacement Date</label><input type="date" value={replaceDateInput} onChange={e => setReplaceDateInput(e.target.value)} /></div>
+            <div className="field">
+              <label>New Vehicle Plate</label>
+              <input value={replacePlateInput} onChange={e => setReplacePlateInput(e.target.value)} list="fleet-plates-replace" placeholder="e.g. 9182-G" />
+              <datalist id="fleet-plates-replace">{vehicles.map(v => <option key={v.id} value={v.plate} />)}</datalist>
+            </div>
+            <div className="field"><label>Rate for New Vehicle ({currency}{replacingAgreement.type === 'monthly' ? '/month' : '/day'}, editable)</label><input type="number" value={replaceRateInput} onChange={e => setReplaceRateInput(e.target.value)} /></div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="btn primary" onClick={confirmReplace}>Confirm Replacement</button>
+              <button className="btn" onClick={() => setReplacingId(null)}>Cancel</button>
             </div>
           </div>
         </div>
@@ -4156,6 +4241,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                     <td className="num">{agreementTotalDays(a)}</td>
                     <td style={{ textAlign: 'right' }}>
                       <button className="btn small primary" onClick={() => openCloseModal(a)}>Close</button>{' '}
+                      <button className="btn small" onClick={() => openReplaceModal(a)}>Replace Vehicle</button>{' '}
                       <button className="icon-btn" onClick={() => voidAgreement(a)} title="Void">⊘</button>
                     </td>
                   </tr>
@@ -4178,9 +4264,9 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
             <tbody>
               {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map(a => (
                 <tr key={a.id}>
-                  <td>{a.raNumber || '—'}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
+                  <td>{a.raNumber || '—'}{a.parentRaNumber && <span style={{ fontSize: 10.5, color: 'var(--steel)', marginLeft: 4 }} title={`Replacement leg of ${a.parentRaNumber}`}>↳ linked</span>}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
                   <td>{a.startDate}</td><td>{a.closeDate || '—'}</td>
-                  <td><span className={`badge ${a.status === 'open' ? 'pos' : a.status === 'void' ? 'neg' : ''}`} style={a.status === 'closed' ? { background: '#EFF4F1', color: 'var(--green)' } : undefined}>{a.status}</span></td>
+                  <td><span className={`badge ${a.status === 'open' ? 'pos' : a.status === 'void' ? 'neg' : ''}`} style={a.status === 'closed' ? { background: '#EFF4F1', color: 'var(--green)' } : a.status === 'replaced' ? { background: '#F0EAF7', color: '#7A5EA8' } : undefined}>{a.status}</span></td>
                   <td className="num">{agreementTotalDays(a)}</td>
                   <td className="num">{fmt(agreementTotalRevenue(a), currency)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
