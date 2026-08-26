@@ -307,7 +307,11 @@ function agreementDailyRate(agreement) {
 
 function agreementTotalRevenue(agreement) {
   if (agreement.revenueOverride !== undefined && agreement.revenueOverride !== '') return num(agreement.revenueOverride);
-  return agreementTotalDays(agreement) * agreementDailyRate(agreement);
+  // Monthly-type agreements price by a standardized 30-day month, so the total must be
+  // based on that same 30-day-per-month model — not the real calendar day count — or a
+  // full month's share would drift above/below the quoted monthly rate.
+  const days = agreement.type === 'monthly' ? agreementTotalDaysForSplit(agreement) : agreementTotalDays(agreement);
+  return days * agreementDailyRate(agreement);
 }
 
 function agreementDaysInMonth(agreement, period) {
@@ -320,6 +324,18 @@ function agreementDaysInMonth(agreement, period) {
   const rangeStart = start > monthStart ? start : monthStart;
   const rangeEnd = end < monthEnd ? end : monthEnd;
   if (rangeEnd < rangeStart) return 0;
+
+  if (agreement.type === 'monthly') {
+    // Standardized 30-day-month convention (matches how the monthly Rate itself is
+    // quoted): a full calendar month always counts as exactly 30 days, regardless of
+    // whether the real month has 28-31 days. A partial month (the agreement's first or
+    // last month) is prorated by day-of-month position on that same 30-day basis.
+    const isFullMonth = rangeStart.getTime() === monthStart.getTime() && rangeEnd.getTime() === monthEnd.getTime();
+    if (isFullMonth) return 30;
+    const startDay = rangeStart.getDate();
+    const endDay = Math.min(rangeEnd.getDate(), 30);
+    return Math.max(0, endDay - startDay + 1);
+  }
   return Math.round((rangeEnd - rangeStart) / 86400000) + 1;
 }
 
@@ -328,6 +344,17 @@ function agreementMonthsSpanned(agreement) {
   const endStr = agreementEffectiveEnd(agreement);
   if (agreement.startDate.slice(0, 7) > endStr.slice(0, 7)) return [];
   return periodsBetween(agreement.startDate.slice(0, 7), endStr.slice(0, 7));
+}
+
+// For 'monthly' agreements, this sums the standardized 30-day-per-month figures across
+// every month spanned — used as the denominator so revenue splits proportionally in a way
+// that's consistent with the flat 30-day model, including when a final total has been
+// manually overridden at closing. For 'daily' agreements this is just the real total days.
+function agreementTotalDaysForSplit(agreement) {
+  if (agreement.type === 'monthly') {
+    return agreementMonthsSpanned(agreement).reduce((s, period) => s + agreementDaysInMonth(agreement, period), 0);
+  }
+  return agreementTotalDays(agreement);
 }
 
 // Aggregates all agreements into { [period]: { [vehicleId]: { days, revenue } } } — only for
@@ -339,12 +366,12 @@ function aggregateAgreements(agreements, vehicles) {
     if (a.status === 'void') return; // voided agreements are fully excluded from all totals
     const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
     if (!vehicle) return; // Sub-Lease / unmatched — excluded from fleet totals
-    const totalDays = agreementTotalDays(a);
     const totalRevenue = agreementTotalRevenue(a);
+    const totalDaysForSplit = agreementTotalDaysForSplit(a);
     agreementMonthsSpanned(a).forEach(period => {
       const monthDays = agreementDaysInMonth(a, period);
       if (monthDays <= 0) return;
-      const monthRevenue = totalDays > 0 ? totalRevenue * (monthDays / totalDays) : 0;
+      const monthRevenue = totalDaysForSplit > 0 ? totalRevenue * (monthDays / totalDaysForSplit) : 0;
       out[period] = out[period] || {};
       out[period][vehicle.id] = out[period][vehicle.id] || { days: 0, revenue: 0 };
       out[period][vehicle.id].days += monthDays;
@@ -4024,14 +4051,22 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     setCloseRevenueInput('');
   }
   const closingAgreement = agreements.find(a => a.id === closingId);
-  const previewDays = closingAgreement ? (closeDaysInput !== '' ? num(closeDaysInput) : (() => {
+  const previewDaysReal = closingAgreement ? (() => {
     const start = new Date(closingAgreement.startDate);
     const end = new Date(closeDateInput);
     return Math.max(0, Math.round((end - start) / 86400000) + 1);
-  })()) : 0;
+  })() : 0;
+  const previewDays = closeDaysInput !== '' ? num(closeDaysInput) : previewDaysReal;
   const previewRate = closeRateInput !== '' ? num(closeRateInput) : (closingAgreement ? num(closingAgreement.rate) : 0);
   const previewDailyRate = closingAgreement && closingAgreement.type === 'monthly' ? previewRate / 30 : previewRate;
-  const previewRevenue = closeRevenueInput !== '' ? num(closeRevenueInput) : previewDays * previewDailyRate;
+  // For Monthly agreements, revenue is priced on a standardized 30-day month, so the
+  // preview here must use the same 30-day-per-month model that actually gets recorded on
+  // save — not the real calendar day count — or this number would silently differ from
+  // what shows up afterward in reports.
+  const previewRevenue = closeRevenueInput !== '' ? num(closeRevenueInput)
+    : closingAgreement && closingAgreement.type === 'monthly' && closeDaysInput === ''
+      ? agreementTotalDaysForSplit({ ...closingAgreement, status: 'closed', closeDate: closeDateInput }) * previewDailyRate
+      : previewDays * previewDailyRate;
 
   function confirmClose() {
     setAgreements(agreements.map(a => a.id === closingId ? {
@@ -4154,7 +4189,9 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
             </div>
             <div className="field"><label>Total Revenue (auto, editable)</label><input type="number" value={closeRevenueInput} onChange={e => setCloseRevenueInput(e.target.value)} placeholder={previewRevenue.toFixed(2)} /></div>
             <div className="panel" style={{ background: '#F7F8F5', marginTop: 4 }}>
-              <p style={{ margin: 0, fontSize: 13.5 }}><b>Summary:</b> {previewDays} days × {fmt(previewDailyRate, currency)}/day = <b>{fmt(previewRevenue, currency)}</b></p>
+              <p style={{ margin: 0, fontSize: 13.5 }}>
+                <b>Summary:</b> {previewDays} calendar day{previewDays === 1 ? '' : 's'}{closingAgreement && closingAgreement.type === 'monthly' && closeDaysInput === '' && closeRevenueInput === '' ? ` (${agreementTotalDaysForSplit({ ...closingAgreement, status: 'closed', closeDate: closeDateInput })} on the standard 30-day-month basis)` : ''} × {fmt(previewDailyRate, currency)}/day = <b>{fmt(previewRevenue, currency)}</b>
+              </p>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <button className="btn primary" onClick={confirmClose}>Confirm Close</button>
