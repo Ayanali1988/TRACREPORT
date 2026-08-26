@@ -805,6 +805,13 @@ function niceAxisMax(max) {
   return niceNormalized * magnitude;
 }
 
+// For percentage-based series (occupancy %, etc.) — the generic 1/2/5/10 rounding above
+// doubles a value like 120 up to 200, leaving most of the chart empty. This instead rounds
+// up to the nearest 20, which keeps the axis close to the real data (e.g. 120 -> 120, 95 -> 100).
+function pctAxisMax(rawMax) {
+  return Math.max(20, Math.ceil(Math.max(rawMax, 1) / 20) * 20);
+}
+
 function GroupedBarChart({ data, series, height = 200 }) {
   const rawMax = Math.max(1, ...data.flatMap(d => series.map(s => Math.abs(d[s.key]) || 0)));
   const niceMax = niceAxisMax(rawMax);
@@ -880,11 +887,11 @@ function HBarList({ data, maxVal }) {
   );
 }
 
-function LineTrendSVG({ data, series, width = 640, height = 240 }) {
+function LineTrendSVG({ data, series, width = 640, height = 240, axisMax }) {
   const allVals = data.flatMap(d => series.map(s => d[s.key] || 0));
   const rawMax = Math.max(...allVals, 0);
   const rawMin = Math.min(...allVals, 0);
-  const niceMax = niceAxisMax(Math.max(Math.abs(rawMax), Math.abs(rawMin), 1));
+  const niceMax = axisMax || niceAxisMax(Math.max(Math.abs(rawMax), Math.abs(rawMin), 1));
   const max = rawMax >= 0 ? niceMax : 0;
   const min = rawMin < 0 ? -niceMax : 0;
   const range = (max - min) || 1;
@@ -2472,14 +2479,14 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
         <button className="btn small" onClick={() => fillAll(0)}>Mark all as 0 days</button>
       </div>
       <table>
-        <thead><tr><th>Vehicle</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
+        <thead><tr><th>S.No</th><th>Vehicle</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
         <tbody>
-          {filtered.map(v => {
+          {filtered.map((v, i) => {
             const d = (occupancy[period] || {})[v.id];
             const pctVal = d !== undefined && d !== '' ? num(d) / baseDays : null;
             return (
               <tr key={v.id}>
-                <td>{v.name}</td><td>{v.plate}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td>
                 <td className="num"><input type="number" min="0" value={d === undefined ? '' : d} onChange={e => setDays(v.id, e.target.value)} /></td>
                 <td className="num">{pctVal === null ? '—' : <span className={`badge ${pctVal >= 0.5 ? 'pos' : 'neg'}`}>{pctStr(pctVal)}</span>}</td>
               </tr>
@@ -2581,11 +2588,11 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
         <div className="panel" style={{ overflowX: 'auto' }}>
           <h3>Occupancy &amp; Income by Vehicle</h3>
           <table>
-            <thead><tr><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
+            <thead><tr><th>S.No</th><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
             <tbody>
-              {vehicleIncomeRows.map(r => (
+              {vehicleIncomeRows.map((r, i) => (
                 <tr key={r.vehicle.id}>
-                  <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                  <td>{i + 1}</td><td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
                   <td className="num">{r.days}</td>
                   <td className="num">{r.avg === null ? '—' : pctStr(r.avg)}</td>
                   <td className="num">{fmt(r.income, currency)}</td>
@@ -2593,7 +2600,7 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
                 </tr>
               ))}
               <tr className="subtotal-row">
-                <td colSpan={2}>Fleet Total</td>
+                <td colSpan={3}>Fleet Total</td>
                 <td className="num">{totalDays}</td>
                 <td className="num">{pctStr(fleetAvg)}</td>
                 <td className="num">{fmt(totalIncome, currency)}</td>
@@ -2605,11 +2612,17 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
       )}
 
       <div className="panel">
-        <h3>Occupancy by Category — Trend</h3>
-        <LineTrendSVG data={categoryTrendData} series={categoryList.map(cat => ({ key: cat.name, label: cat.name, color: cat.color }))} />
-        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
-          {categoryList.map(cat => <span key={cat.name} style={{ marginRight: 12 }}>■ <span style={{ color: cat.color }}>{cat.name}</span></span>)}
-        </div>
+        <h3>Occupancy by Category {monthKeys.length > 1 ? '— Trend' : `— ${monthLabel(monthKeys[0])}`}</h3>
+        {monthKeys.length > 1 ? (
+          <>
+            <LineTrendSVG data={categoryTrendData} series={categoryList.map(cat => ({ key: cat.name, label: cat.name, color: cat.color }))} axisMax={pctAxisMax(Math.max(...categoryTrendData.flatMap(d => categoryList.map(c => d[c.name] || 0))))} />
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
+              {categoryList.map(cat => <span key={cat.name} style={{ marginRight: 12 }}>■ <span style={{ color: cat.color }}>{cat.name}</span></span>)}
+            </div>
+          </>
+        ) : (
+          <HBarList data={categoryList.map(cat => ({ name: cat.name, value: cat.avgOverall === null ? 0 : Math.round(cat.avgOverall * 100), display: cat.avgOverall === null ? '—' : pctStr(cat.avgOverall), color: cat.color }))} maxVal={Math.max(100, ...categoryList.map(cat => cat.avgOverall === null ? 0 : Math.round(cat.avgOverall * 100)))} />
+        )}
       </div>
 
       <div className="panel">
@@ -2628,15 +2641,18 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
         </table>
       </div>
 
-      <div className="grid-2">
-        <div className="panel"><h3>Occupancy by Vehicle</h3><HBarList data={barData} maxVal={100} /></div>
-        <div className="panel">
-          <h3>Occupancy Distribution</h3>
+      <div className="panel">
+        <h3 style={{ fontSize: 17 }}>Occupancy by Vehicle</h3>
+        <div style={{ fontSize: 14, lineHeight: 2.1 }}><HBarList data={barData} maxVal={100} /></div>
+      </div>
+      <div className="panel">
+        <h3 style={{ fontSize: 17 }}>Occupancy Distribution</h3>
+        <div style={{ fontSize: 14, lineHeight: 2.4 }}>
           {Object.entries(buckets).map(([name, value], i) => (
-            <div className="hbar-row" key={name}>
-              <div className="hbar-name">{name}</div>
-              <div className="hbar-track"><div className="hbar-fill" style={{ width: (value / Math.max(1, displayVehicles.length) * 100) + '%', background: COLORS[i % COLORS.length] }} /></div>
-              <div className="hbar-val">{value}</div>
+            <div className="hbar-row" key={name} style={{ marginBottom: 6 }}>
+              <div className="hbar-name" style={{ fontSize: 14 }}>{name}</div>
+              <div className="hbar-track" style={{ height: 20 }}><div className="hbar-fill" style={{ width: (value / Math.max(1, displayVehicles.length) * 100) + '%', background: COLORS[i % COLORS.length] }} /></div>
+              <div className="hbar-val" style={{ fontSize: 16, fontWeight: 700 }}>{value}</div>
             </div>
           ))}
         </div>
@@ -2672,11 +2688,11 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
         <div className="panel" style={{ overflowX: 'auto', borderLeft: '4px solid var(--steel)' }}>
           <h3>Sub-Lease Vehicles (Borrowed — not part of owned fleet totals above)</h3>
           <table>
-            <thead><tr><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th></tr></thead>
+            <thead><tr><th>S.No</th><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th></tr></thead>
             <tbody>
-              {agreements.filter(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate)).map(a => (
+              {agreements.filter(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate)).map((a, i) => (
                 <tr key={a.id}>
-                  <td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
+                  <td>{i + 1}</td><td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
                   <td>{a.startDate}</td>
                   <td><span className={`badge ${a.status === 'open' ? 'pos' : ''}`}>{a.status}</span></td>
                   <td className="num">{agreementTotalDays(a)}</td>
@@ -2708,13 +2724,13 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
         <div className="field" style={{ maxWidth: 260 }}><label>Search</label><input placeholder="Filter vehicles…" value={search} onChange={e => setSearch(e.target.value)} /></div>
       </div>
       <table>
-        <thead><tr><th>Model / Name</th><th>Plate</th><th className="num">Income This Month ({currency})</th></tr></thead>
+        <thead><tr><th>S.No</th><th>Model / Name</th><th>Plate</th><th className="num">Income This Month ({currency})</th></tr></thead>
         <tbody>
-          {filtered.map(v => {
+          {filtered.map((v, i) => {
             const val = (vehicleRevenue[period] || {})[v.id];
             return (
               <tr key={v.id}>
-                <td>{v.name}</td><td>{v.plate}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td>
                 <td className="num"><input type="number" value={val === undefined ? '' : val} onChange={e => setAmount(v.id, e.target.value)} /></td>
               </tr>
             );
@@ -2832,10 +2848,11 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Per-Vehicle Detail (grouped by {groupBy === 'category' ? 'category' : 'model'})</h3>
         <table>
-          <thead><tr><th></th><th>Model</th><th>Plate</th><th>Category</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th className="num">Avg Monthly Income</th><th className="num">Required / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
+          <thead><tr><th>S.No</th><th></th><th>Model</th><th>Plate</th><th>Category</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th className="num">Avg Monthly Income</th><th className="num">Required / Month</th><th className="num">Coverage</th><th>Verdict</th></tr></thead>
           <tbody>
-            {unitStats.slice().sort((a, b) => groupKeyFor(a.vehicle).localeCompare(groupKeyFor(b.vehicle)) || a.vehicle.name.localeCompare(b.vehicle.name)).map(({ vehicle, stats }) => (
+            {unitStats.slice().sort((a, b) => groupKeyFor(a.vehicle).localeCompare(groupKeyFor(b.vehicle)) || a.vehicle.name.localeCompare(b.vehicle.name)).map(({ vehicle, stats }, i) => (
               <tr key={vehicle.id}>
+                <td>{i + 1}</td>
                 <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: vehicle.color ? carColorHex(vehicle.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{vehicle.color || ''}</span></td>
                 <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.category || '—'}</td>
                 <td className="num">{vehicle.purchaseValue ? fmt(vehicle.purchaseValue, currency) : '—'}</td>
@@ -2854,15 +2871,15 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
         <h3>Vehicle Lifetime Performance</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Total time in operation and total income earned from each vehicle's Purchase Date to now (or to its Sale Date if sold) — independent of the report period selected above. Only vehicles with a Purchase Date set are shown.</p>
         <table>
-          <thead><tr><th>Model</th><th>Plate</th><th>Purchase Date</th><th>Status</th><th className="num">Time in Operation</th><th className="num">Useful Life Consumed</th><th className="num">Total Income Earned</th></tr></thead>
+          <thead><tr><th>S.No</th><th>Model</th><th>Plate</th><th>Purchase Date</th><th>Status</th><th className="num">Time in Operation</th><th className="num">Useful Life Consumed</th><th className="num">Total Income Earned</th></tr></thead>
           <tbody>
-            {unitStats.filter(({ vehicle }) => vehicle.purchaseDate).map(({ vehicle, stats }) => {
+            {unitStats.filter(({ vehicle }) => vehicle.purchaseDate).map(({ vehicle, stats }, i) => {
               const lt = vehicleLifetimeStats(vehicle, vehicleRevenue);
               const usefulLifeMonths = stats.usefulLife * 12;
               const consumedPct = usefulLifeMonths ? lt.monthsElapsed / usefulLifeMonths : 0;
               return (
                 <tr key={vehicle.id}>
-                  <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.purchaseDate}</td>
+                  <td>{i + 1}</td><td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.purchaseDate}</td>
                   <td>{vehicle.saleDate ? <span className="badge neg">Sold {vehicle.saleDate}</span> : <span className="badge pos">Active</span>}</td>
                   <td className="num">{(lt.monthsElapsed / 12).toFixed(1)} yrs ({lt.monthsElapsed} mo)</td>
                   <td className="num">{consumedPct >= 1 ? <span style={{ color: 'var(--red)' }}>Fully consumed</span> : `${(consumedPct * stats.usefulLife).toFixed(1)} of ${stats.usefulLife} yrs used`}</td>
@@ -2871,7 +2888,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
               );
             })}
             {unitStats.filter(({ vehicle }) => vehicle.purchaseDate).length === 0 && (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No vehicles have a Purchase Date set yet — add one in the Vehicles tab to see lifetime performance here.</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No vehicles have a Purchase Date set yet — add one in the Vehicles tab to see lifetime performance here.</td></tr>
             )}
           </tbody>
         </table>
@@ -3214,12 +3231,13 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add a loan for each financed vehicle — enter the car value, down payment, interest rate, fees, and term, then generate the payment schedule.</p>
         ) : (
           <table>
-            <thead><tr><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th className="num">Interest Balance</th><th>Next Due</th><th></th></tr></thead>
+            <thead><tr><th>S.No</th><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th className="num">Interest Balance</th><th>Next Due</th><th></th></tr></thead>
             <tbody>
-              {displayLoans.map(l => {
+              {displayLoans.map((l, i) => {
                 const s = loanStats(l);
                 return (
                   <tr key={l.id} style={{ background: l.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => { setSelectedId(l.id); onSelectOnlyLoan(l.id); }}>
+                    <td>{i + 1}</td>
                     <td>{l.modelName || '(unnamed)'}</td>
                     <td>{l.lender || '—'}</td>
                     <td className="num">{fmt(loanAmount(l), currency)}</td>
@@ -3691,13 +3709,13 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>Model / Name</th><th>Plate</th><th>Category</th><th>Ownership</th><th>Color</th><th>Status</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
+          <thead><tr><th>S.No</th><th>Model / Name</th><th>Plate</th><th>Category</th><th>Ownership</th><th>Color</th><th>Status</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
-            {filtered.map(v => {
+            {filtered.map((v, i) => {
               const isSold = !!v.saleDate;
               return (
               <tr key={v.id} style={isSold ? { opacity: 0.7 } : undefined}>
-                <td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
                 <td>{v.ownershipType === 'sublease' ? <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> : v.ownershipType === 'investor' ? <span className="badge" style={{ background: '#FFF6E8', color: 'var(--amber)' }}>Investor</span> : <span className="badge" style={{ background: '#EFF4F1', color: 'var(--green)' }}>Owned</span>}</td>
                 <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 4, background: v.color ? carColorHex(v.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{v.color || '—'}</span></td>
                 <td>
@@ -3937,10 +3955,11 @@ function InvestorsFleetPanel({ vehicles, vehicleRevenue, rangeMonths, currency }
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Investors Fleet — {rangeMonths.map(monthLabel).join(' – ')}</h3>
         <table>
-          <thead><tr><th>Vehicle</th><th>Investor</th><th className="num">Commission %</th><th className="num">Total Revenue</th><th className="num">Company's Commission</th><th className="num">Investor's Payout</th></tr></thead>
+          <thead><tr><th>S.No</th><th>Vehicle</th><th>Investor</th><th className="num">Commission %</th><th className="num">Total Revenue</th><th className="num">Company's Commission</th><th className="num">Investor's Payout</th></tr></thead>
           <tbody>
-            {rows.map(r => (
+            {rows.map((r, i) => (
               <tr key={r.v.id}>
+                <td>{i + 1}</td>
                 <td>{r.v.name} ({r.v.plate})</td>
                 <td>{r.v.investorName || '—'}</td>
                 <td className="num">{r.v.investorCommissionPct || 0}%</td>
@@ -4311,13 +4330,13 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <h3>Open Agreements — Weekly Review</h3>
           <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Review this list weekly — confirm which are still genuinely active before finalizing the month's occupancy. Close any that have actually ended.</p>
           <table>
-            <thead><tr><th>RA#</th><th>Customer</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start Date</th><th className="num">Days So Far</th><th></th></tr></thead>
+            <thead><tr><th>S.No</th><th>RA#</th><th>Customer</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start Date</th><th className="num">Days So Far</th><th></th></tr></thead>
             <tbody>
-              {openAgreements.map(a => {
+              {openAgreements.map((a, i) => {
                 const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : null;
                 return (
                   <tr key={a.id}>
-                    <td>{a.raNumber || '—'}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td>
+                    <td>{i + 1}</td><td>{a.raNumber || '—'}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td>
                     <td>{vehicle ? vehicle.name : <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span>}</td>
                     <td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td><td>{a.startDate}</td>
                     <td className="num">{agreementTotalDays(a)}</td>
@@ -4329,7 +4348,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   </tr>
                 );
               })}
-              {openAgreements.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No open agreements.</td></tr>}
+              {openAgreements.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No open agreements.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4342,10 +4361,11 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
             <input placeholder="Search RA#, plate, or customer" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5, width: 220 }} />
           </div>
           <table>
-            <thead><tr><th>RA#</th><th>Customer</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
+            <thead><tr><th>S.No</th><th>RA#</th><th>Customer</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
             <tbody>
-              {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map(a => (
+              {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map((a, i) => (
                 <tr key={a.id}>
+                  <td>{i + 1}</td>
                   <td>{a.raNumber || '—'}{a.parentRaNumber && <span style={{ fontSize: 10.5, color: 'var(--steel)', marginLeft: 4 }} title={`Replacement leg of ${a.parentRaNumber}`}>↳ linked</span>}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
                   <td>{a.startDate}</td><td>{a.closeDate || '—'}</td>
                   <td><span className={`badge ${a.status === 'open' ? 'pos' : a.status === 'void' ? 'neg' : ''}`} style={a.status === 'closed' ? { background: '#EFF4F1', color: 'var(--green)' } : a.status === 'replaced' ? { background: '#F0EAF7', color: '#7A5EA8' } : undefined}>{a.status}</span></td>
@@ -4357,7 +4377,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4415,10 +4435,11 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
       <div className="panel">
         <h3>All Policies ({policies.length})</h3>
         <table>
-          <thead><tr><th>Vehicle</th><th className="num">Vehicle Value</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
+          <thead><tr><th>S.No</th><th>Vehicle</th><th className="num">Vehicle Value</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
           <tbody>
-            {sorted.map(p => (
+            {sorted.map((p, i) => (
               <tr key={p.id}>
+                <td>{i + 1}</td>
                 <td>{vehicleName(p.vehicleId)}</td>
                 <td className="num">{p.vehicleValue ? fmt(p.vehicleValue, currency) : <span style={{ color: 'var(--amber)' }}>Not set</span>}</td>
                 <td className="num">{fmt(p.premiumAmount, currency)}</td>
@@ -4432,7 +4453,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
                 </td>
               </tr>
             ))}
-            {policies.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No insurance policies added yet.</td></tr>}
+            {policies.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No insurance policies added yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -5126,11 +5147,11 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
       <div className="panel">
         <h3>Occupancy Summary</h3>
         <table>
-          <thead><tr><th>Car</th><th>Plate</th><th className="num">Avg Occupancy</th><th>Remarks</th></tr></thead>
+          <thead><tr><th>S.No</th><th>Car</th><th>Plate</th><th className="num">Avg Occupancy</th><th>Remarks</th></tr></thead>
           <tbody>
-            {occRows.map(r => (
+            {occRows.map((r, i) => (
               <tr key={r.vehicle.id}>
-                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                <td>{i + 1}</td><td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
                 <td className="num">{r.avg === null ? '—' : (r.avg * 100).toFixed(0) + '%'}</td>
                 <td>{r.avg === null ? '—' : (r.avg >= 0.5 ? 'OK' : 'Workout')}</td>
               </tr>
