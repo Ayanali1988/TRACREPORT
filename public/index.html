@@ -255,6 +255,38 @@ function findVehicleByPlate(vehicles, plate) {
   return vehicles.find(v => (v.plate || '').trim().toLowerCase() === norm);
 }
 
+// Registration and Insurance expiry alerts, shared by the app-wide banner and Fleet Data
+// Report. Registration: a daily countdown warning from 7 days out, escalating to a
+// persistent/critical alert from 1 day before expiry through however long it stays
+// unrenewed. Insurance: a week's heads-up to process the renewal in time, escalating to
+// critical once it actually lapses.
+function vehicleExpiryAlerts(vehicles, insurancePolicies, today) {
+  const alerts = [];
+  const todayDate = new Date(today);
+  function daysUntil(dateStr) {
+    if (!dateStr) return null;
+    return Math.round((new Date(dateStr) - todayDate) / 86400000);
+  }
+  function daysLabel(d) {
+    if (d < 0) return `expired ${Math.abs(d)} day${Math.abs(d) === 1 ? '' : 's'} ago`;
+    if (d === 0) return 'expires today';
+    return `${d} day${d === 1 ? '' : 's'} left`;
+  }
+  vehicles.forEach(v => {
+    const regDays = daysUntil(v.registrationExpiry);
+    if (regDays !== null && regDays <= 7) {
+      alerts.push({ vehicleId: v.id, vehicleName: v.name, type: 'registration', daysLeft: regDays, message: `${v.name} (${v.plate}) registration ${daysLabel(regDays)}`, severity: regDays <= 1 ? 'critical' : 'warning' });
+    }
+    const list = (insurancePolicies || []).filter(p => p.vehicleId === v.id).sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''));
+    const latest = list[0];
+    const insDays = latest ? daysUntil(latest.endDate) : null;
+    if (insDays !== null && insDays <= 7) {
+      alerts.push({ vehicleId: v.id, vehicleName: v.name, type: 'insurance', daysLeft: insDays, message: `${v.name} (${v.plate}) insurance ${daysLabel(insDays)} — process the renewal now`, severity: insDays < 0 ? 'critical' : 'warning' });
+    }
+  });
+  return alerts;
+}
+
 function agreementEffectiveEnd(agreement) {
   if (agreement.status === 'closed' && agreement.closeDate) return agreement.closeDate;
   return todayStr(); // still open: provisional, counted through today
@@ -898,6 +930,19 @@ function App() {
     }
     styleEl.textContent = `@page { size: A4 landscape; margin: ${printMargin}; }`;
   }, [printMargin]);
+
+  // Use the uploaded company logo as the browser tab icon (favicon), and the company name
+  // as the tab title, instead of the browser's generic default globe icon.
+  useEffect(() => {
+    let iconEl = document.querySelector('link[rel="icon"]');
+    if (!iconEl) {
+      iconEl = document.createElement('link');
+      iconEl.rel = 'icon';
+      document.head.appendChild(iconEl);
+    }
+    iconEl.href = logoDataUrl || '';
+    document.title = companyName ? `${companyName} — Fleet Financial Report` : 'Fleet Financial Report';
+  }, [logoDataUrl, companyName]);
   const [selectedLoanIds, setSelectedLoanIds] = useState([]); // empty = all loans included
   const [selectedOccVehicleIds, setSelectedOccVehicleIds] = useState([]); // empty = all vehicles included
 
@@ -1138,6 +1183,10 @@ function App() {
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const overdueLoans = useMemo(() => loans.map(l => ({ loan: l, stats: loanStats(l) })).filter(x => x.stats.overdue), [loans]);
+  const expiryAlerts = useMemo(() => vehicleExpiryAlerts(vehicles, insurancePolicies, todayStr()), [vehicles, insurancePolicies]);
+  const criticalExpiryAlerts = expiryAlerts.filter(a => a.severity === 'critical');
+  const warningExpiryAlerts = expiryAlerts.filter(a => a.severity === 'warning');
+  const [dismissedExpiryWarningIds, setDismissedExpiryWarningIds] = useState([]);
   const [dismissedPaymentAlert, setDismissedPaymentAlert] = useState(false);
   const rangeMonths = useMemo(() => periodsBetween(reportFrom, reportTo), [reportFrom, reportTo]);
   const financingReportLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
@@ -1513,6 +1562,27 @@ function App() {
             </span>
             <button className="btn small" onClick={() => setActiveTab('agreements')}>Review Open Agreements</button>
             <button className="btn small" onClick={() => setLastAgreementReview(todayStr())}>Mark as Reviewed Today</button>
+          </div>
+        )}
+
+        {criticalExpiryAlerts.length > 0 && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Registration/Insurance Due</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {criticalExpiryAlerts.length === 1 ? criticalExpiryAlerts[0].message : `${criticalExpiryAlerts.length} vehicles need registration or insurance renewed right away.`}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('fleet-data-report')}>Go to Fleet Data Report</button>
+          </div>
+        )}
+
+        {warningExpiryAlerts.filter(a => !dismissedExpiryWarningIds.includes(a.vehicleId + a.type)).length > 0 && (
+          <div className="no-print" style={{ background: '#FFF6E8', borderBottom: '1px solid var(--amber)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>⚠ Renewals Coming Up</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {(() => { const list = warningExpiryAlerts.filter(a => !dismissedExpiryWarningIds.includes(a.vehicleId + a.type)); return list.length === 1 ? list[0].message : `${list.length} vehicles have registration/insurance expiring within a week.`; })()}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('fleet-data-report')}>Go to Fleet Data Report</button>
+            <button className="btn small" onClick={() => setDismissedExpiryWarningIds([...dismissedExpiryWarningIds, ...warningExpiryAlerts.map(a => a.vehicleId + a.type)])}>Dismiss</button>
           </div>
         )}
 
@@ -2031,7 +2101,7 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
                       <button className="icon-btn" title="Override this month" onClick={() => setInsuranceOverrides(prev => ({ ...prev, [period]: true }))}>✎</button>
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
                       <input id={`cell-${sectionKey}-${idx}-actual`} type="number" value={cellVal.actual || ''}
                         onChange={e => setCell(item.key, 'actual', e.target.value)}
                         onBlur={e => commitCellExpr(item.key, 'actual', e.target.value)}
@@ -2481,6 +2551,35 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
           </div>
         );
       })()}
+
+      {vehicleRevenue && (
+        <div className="panel" style={{ overflowX: 'auto' }}>
+          <h3>Occupancy &amp; Income by Vehicle</h3>
+          <table>
+            <thead><tr><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
+            <tbody>
+              {rows.map(r => {
+                let days = 0, income = 0;
+                monthKeys.forEach(p => {
+                  const d = (occupancy[p] || {})[r.vehicle.id];
+                  if (d !== undefined && d !== '') days += num(d);
+                  income += num((vehicleRevenue[p] || {})[r.vehicle.id]);
+                });
+                const avgRate = days ? income / days : 0;
+                return (
+                  <tr key={r.vehicle.id}>
+                    <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                    <td className="num">{days}</td>
+                    <td className="num">{r.avg === null ? '—' : pctStr(r.avg)}</td>
+                    <td className="num">{fmt(income, currency)}</td>
+                    <td className="num">{avgRate ? fmt(avgRate, currency) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Occupancy Matrix</h3>
@@ -3818,9 +3917,9 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
     const newInsuranceStart = latest && latest.endDate ? addDaysToDate(latest.endDate, 1) : today;
     const newInsuranceEnd = addMonthsToDate(newInsuranceStart, 13);
     const newRegExpiry = v.registrationExpiry ? addMonthsToDate(v.registrationExpiry, 12) : addMonthsToDate(today, 12);
-    setInsurancePolicies([...insurancePolicies, { id: uid('ins'), vehicleId: v.id, premiumAmount: latest ? latest.premiumAmount : '', startDate: newInsuranceStart, endDate: newInsuranceEnd }]);
+    setInsurancePolicies([...insurancePolicies, { id: uid('ins'), vehicleId: v.id, vehicleValue: '', premiumAmount: '', startDate: newInsuranceStart, endDate: newInsuranceEnd }]);
     setVehicles(vehicles.map(x => x.id === v.id ? { ...x, registrationExpiry: newRegExpiry } : x));
-    window.alert(`Renewed. New Registration Expiry: ${newRegExpiry}. New Insurance Policy: ${newInsuranceStart} to ${newInsuranceEnd} — both editable in Vehicles / Insurance Policies if the actual dates differ slightly.`);
+    window.alert(`Renewed. New Registration Expiry: ${newRegExpiry}. New Insurance Policy created for ${newInsuranceStart} to ${newInsuranceEnd} — both dates are editable if the actual renewal differs slightly. Vehicle Value and Premium are left blank on purpose: go to Insurance Policies and enter this year's insured value and premium (they typically change year to year as the car ages), rather than carrying forward last year's figures.`);
   }
 
   const rows = vehicles.map((v, i) => {
@@ -3866,7 +3965,7 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
 
 function emptyAgreement() {
   return {
-    id: uid('agr'), raNumber: '', plate: '', vehicleId: '',
+    id: uid('agr'), raNumber: '', plate: '', vehicleId: '', customerName: '',
     type: 'daily', startDate: todayStr(), closeDate: '', status: 'open',
     rate: '', daysOverride: '', revenueOverride: '',
     replacementPlate: '', notes: '',
@@ -3963,7 +4062,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   }
 
   const openAgreements = agreements.filter(a => a.status === 'open');
-  const filtered = agreements.filter(a => !search || (a.raNumber || '').toLowerCase().includes(search.toLowerCase()) || (a.plate || '').toLowerCase().includes(search.toLowerCase()));
+  const filtered = agreements.filter(a => !search || (a.raNumber || '').toLowerCase().includes(search.toLowerCase()) || (a.plate || '').toLowerCase().includes(search.toLowerCase()) || (a.customerName || '').toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div>
@@ -4003,6 +4102,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <h3>Add Agreement</h3>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <div className="field" style={{ flex: '1 1 140px' }}><label>RA# (Agreement No)</label><input value={form.raNumber} onChange={e => setForm({ ...form, raNumber: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 180px' }}><label>Customer Name</label><input value={form.customerName} onChange={e => setForm({ ...form, customerName: e.target.value })} /></div>
             <div className="field" style={{ flex: '1 1 140px' }}>
               <label>Vehicle Plate</label>
               <input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} list="fleet-plates" placeholder="e.g. 9182-G" />
@@ -4044,13 +4144,13 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <h3>Open Agreements — Weekly Review</h3>
           <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Review this list weekly — confirm which are still genuinely active before finalizing the month's occupancy. Close any that have actually ended.</p>
           <table>
-            <thead><tr><th>RA#</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start Date</th><th className="num">Days So Far</th><th></th></tr></thead>
+            <thead><tr><th>RA#</th><th>Customer</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start Date</th><th className="num">Days So Far</th><th></th></tr></thead>
             <tbody>
               {openAgreements.map(a => {
                 const vehicle = a.vehicleId ? vehicles.find(v => v.id === a.vehicleId) : null;
                 return (
                   <tr key={a.id}>
-                    <td>{a.raNumber || '—'}</td><td>{a.plate}</td>
+                    <td>{a.raNumber || '—'}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td>
                     <td>{vehicle ? vehicle.name : <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span>}</td>
                     <td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td><td>{a.startDate}</td>
                     <td className="num">{agreementTotalDays(a)}</td>
@@ -4061,7 +4161,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   </tr>
                 );
               })}
-              {openAgreements.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No open agreements.</td></tr>}
+              {openAgreements.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No open agreements.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4071,14 +4171,14 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         <div className="panel" style={{ overflowX: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
             <h3 style={{ margin: 0 }}>All Agreements</h3>
-            <input placeholder="Search RA# or plate" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
+            <input placeholder="Search RA#, plate, or customer" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5, width: 220 }} />
           </div>
           <table>
-            <thead><tr><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
+            <thead><tr><th>RA#</th><th>Customer</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
             <tbody>
               {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map(a => (
                 <tr key={a.id}>
-                  <td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
+                  <td>{a.raNumber || '—'}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
                   <td>{a.startDate}</td><td>{a.closeDate || '—'}</td>
                   <td><span className={`badge ${a.status === 'open' ? 'pos' : a.status === 'void' ? 'neg' : ''}`} style={a.status === 'closed' ? { background: '#EFF4F1', color: 'var(--green)' } : undefined}>{a.status}</span></td>
                   <td className="num">{agreementTotalDays(a)}</td>
@@ -4089,7 +4189,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4099,7 +4199,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
 }
 
 function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }) {
-  const emptyForm = { vehicleId: '', premiumAmount: '', startDate: '', endDate: '' };
+  const emptyForm = { vehicleId: '', vehicleValue: '', premiumAmount: '', startDate: '', endDate: '' };
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState(null);
 
@@ -4107,7 +4207,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
   function monthsCovered(p) { return p.startDate && p.endDate ? periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7)).length : 0; }
 
   function savePolicy() {
-    if (!form.vehicleId || !form.premiumAmount || !form.startDate || !form.endDate) { window.alert('Vehicle, Premium Amount, Start Date, and End Date are all required.'); return; }
+    if (!form.vehicleId || !form.vehicleValue || !form.premiumAmount || !form.startDate || !form.endDate) { window.alert('Vehicle, Vehicle Value, Premium Amount, Start Date, and End Date are all required.'); return; }
     if (editId) {
       setPolicies(policies.map(p => p.id === editId ? { ...p, ...form } : p));
       setEditId(null);
@@ -4116,7 +4216,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
     }
     setForm(emptyForm);
   }
-  function editPolicy(p) { setEditId(p.id); setForm({ vehicleId: p.vehicleId, premiumAmount: p.premiumAmount, startDate: p.startDate, endDate: p.endDate }); }
+  function editPolicy(p) { setEditId(p.id); setForm({ vehicleId: p.vehicleId, vehicleValue: p.vehicleValue || '', premiumAmount: p.premiumAmount, startDate: p.startDate, endDate: p.endDate }); }
   function deletePolicy(p) { if (!confirmDelete(`this insurance policy for ${vehicleName(p.vehicleId)}`, deletePin)) return; setPolicies(policies.filter(x => x.id !== p.id)); }
 
   const sorted = policies.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
@@ -4125,7 +4225,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
     <div>
       <div className="panel">
         <h3>{editId ? 'Edit Policy' : 'Add Insurance Policy'}</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Multiple policies per vehicle over time are fine — renewals become new entries, old ones stay as history. The premium is split evenly across the months it covers, and feeds P&L Entry's Insurance Charges automatically.</p>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Multiple policies per vehicle over time are fine — renewals become new entries, old ones stay as history. Vehicle Value is the insured value for that policy year (it typically changes at each renewal as the car ages) — record it here so premium changes year to year make sense. The premium is split evenly across the months it covers, and feeds P&L Entry's Insurance Charges automatically.</p>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div className="field" style={{ flex: '1 1 200px' }}>
             <label>Vehicle</label>
@@ -4134,6 +4234,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
               {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
             </select>
           </div>
+          <div className="field" style={{ flex: '1 1 150px' }}><label>Vehicle Value ({currency})</label><input type="number" value={form.vehicleValue} onChange={e => setForm({ ...form, vehicleValue: e.target.value })} placeholder="Insured value this year" /></div>
           <div className="field" style={{ flex: '1 1 150px' }}><label>Premium Amount ({currency})</label><input type="number" value={form.premiumAmount} onChange={e => setForm({ ...form, premiumAmount: e.target.value })} placeholder="16500" /></div>
           <div className="field" style={{ flex: '1 1 150px' }}><label>Start Date</label><input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 150px' }}><label>End Date</label><input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
@@ -4146,11 +4247,12 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
       <div className="panel">
         <h3>All Policies ({policies.length})</h3>
         <table>
-          <thead><tr><th>Vehicle</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
+          <thead><tr><th>Vehicle</th><th className="num">Vehicle Value</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
           <tbody>
             {sorted.map(p => (
               <tr key={p.id}>
                 <td>{vehicleName(p.vehicleId)}</td>
+                <td className="num">{p.vehicleValue ? fmt(p.vehicleValue, currency) : <span style={{ color: 'var(--amber)' }}>Not set</span>}</td>
                 <td className="num">{fmt(p.premiumAmount, currency)}</td>
                 <td>{p.startDate}</td>
                 <td>{p.endDate}</td>
@@ -4162,7 +4264,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
                 </td>
               </tr>
             ))}
-            {policies.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No insurance policies added yet.</td></tr>}
+            {policies.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No insurance policies added yet.</td></tr>}
           </tbody>
         </table>
       </div>
