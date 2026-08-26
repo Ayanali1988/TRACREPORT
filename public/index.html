@@ -5057,4 +5057,41 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
         <KpiCard label="Total Income" value={fmt(totals.income_actual, currency)} sub={`Budget ${fmt(totals.income_budget, currency)}`} diff={totals.income_actual - totals.income_budget} />
         <KpiCard label="Gross Profit" value={fmt(totals.gross_actual, currency)} sub={`Budget ${fmt(totals.gross_budget, currency)}`} diff={totals.gross_actual - totals.gross_budget} />
         <KpiCard label="EBITDA" value={fmt(totals.ebitda_actual, currency)} sub={`Budget ${fmt(totals.ebitda_budget, currency)}`} diff={totals.ebitda_actual - totals.ebitda_budget} />
-        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} rawValue={totals.netprofit_actual} 
+        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} rawValue={totals.netprofit_actual} signColor />
+      </div>
+
+      <div className="panel">
+        <h3>Income &amp; Net Profit Trend</h3>
+        <LineTrendSVG data={yearData} series={[
+          { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+          { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
+          { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+          { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
+        ]} />
+      </div>
+
+      <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
+
+      <div className="panel">
+        <h3>Occupancy Summary</h3>
+        <table>
+          <thead><tr><th>Car</th><th>Plate</th><th className="num">Avg Occupancy</th><th>Remarks</th></tr></thead>
+          <tbody>
+            {occRows.map(r => (
+              <tr key={r.vehicle.id}>
+                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
+                <td className="num">{r.avg === null ? '—' : (r.avg * 100).toFixed(0) + '%'}</td>
+                <td>{r.avg === null ? '—' : (r.avg >= 0.5 ? 'OK' : 'Workout')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
