@@ -618,6 +618,7 @@ function fullDateLabel(dateStr) {
 
 function parseFlexibleDate(str) {
   str = String(str || '').trim();
+  str = str.split(' ')[0]; // drop any trailing time-of-day (e.g. "13/11/2025 16:45" -> "13/11/2025")
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
   if (/^\d{4}-\d{2}$/.test(str)) return str + '-01';
   const m = str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/); // DD/MM/YYYY
@@ -4092,16 +4093,27 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     let next = [...agreements];
     lines.forEach(line => {
       const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
-      const [raNumber, plate, type, startDate, endDateOrStatus, rate, status] = cols;
+      // Matches your export layout exactly: Agreement No, Type, Vehicle, Permanent Vehicle,
+      // Customer, Customer Code, Contact No, Driver, Driver Code, Driver Nationality,
+      // Start Date, End Date, Rental Days, Additional Notes, Notes, PO No, Status, Rate,
+      // Taxable Amount, VAT, Total Amount.
+      const [raNumber, type, plate, , customerName, , , , , , startDateRaw, endDateRaw, , , , , status, rateRaw] = cols;
       if (!plate) return;
-      const isClosedHint = (endDateOrStatus || '').toLowerCase().includes('close') || (status || '').toLowerCase().includes('close');
+      const isOpen = (status || '').trim().toLowerCase() === 'open';
+      // Rental Days, Taxable Amount, VAT, and Total Amount are all ignored on purpose: Days
+      // is computed fresh from Start/Close so it's never stale, and Rate (net of VAT) is
+      // what income is calculated from, never the VAT-inclusive Total.
+      const rate = (rateRaw || '').replace(/\/\s*(Month|Day)/i, '').trim();
       const vehicle = findVehicleByPlate(vehicles, plate);
       const parsedAgreement = {
-        raNumber: raNumber || '', plate, vehicleId: vehicle ? vehicle.id : '',
+        raNumber: raNumber || '', plate, vehicleId: vehicle ? vehicle.id : '', customerName: customerName || '',
         type: (type || '').toLowerCase().includes('month') ? 'monthly' : 'daily',
-        startDate: parseFlexibleDate(startDate) || todayStr(),
-        closeDate: isClosedHint && endDateOrStatus && !endDateOrStatus.toLowerCase().includes('close') ? parseFlexibleDate(endDateOrStatus) : '',
-        status: isClosedHint ? 'closed' : 'open',
+        startDate: parseFlexibleDate(startDateRaw) || todayStr(),
+        // An End Date is only meaningful once the contract is actually Closed — while a
+        // contract is still Open, any End Date present is just an expected/estimated return
+        // date, not a real one, so it's ignored entirely.
+        closeDate: !isOpen ? parseFlexibleDate(endDateRaw) : '',
+        status: isOpen ? 'open' : 'closed',
         rate: rate || '0',
       };
       // Dedup: if this RA# already exists, update it in place rather than adding a duplicate.
@@ -4117,7 +4129,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         const conflict = next.find(a => a.status === 'open' && (a.plate || '').trim().toLowerCase() === plate.trim().toLowerCase());
         if (conflict) { conflicts.push(`${raNumber || '(no RA#)'} — ${plate} already open under RA# ${conflict.raNumber || conflict.id}`); return; }
       }
-      next.push({ ...emptyAgreement(), ...parsedAgreement, daysOverride: '', revenueOverride: '', replacementPlate: '', notes: '', customerName: '', parentRaNumber: '' });
+      next.push({ ...emptyAgreement(), ...parsedAgreement, daysOverride: '', revenueOverride: '', replacementPlate: '', notes: '', parentRaNumber: '' });
       added++;
     });
     setAgreements(next);
@@ -4216,10 +4228,10 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       {view === 'import' && (
         <div className="panel">
           <h3>Import / Paste Agreements</h3>
-          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>One agreement per line: <code>RA#, Plate, Type (Daily/Monthly), Start Date, End Date or "Open"/"Closed", Rate</code>. Plates not in your fleet are auto-flagged as Sub-Lease. Use the Rate column only — never Total Amount (which includes VAT).</p>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Paste rows directly from your agreement report — same column layout: <code>Agreement No, Type, Vehicle, Permanent Vehicle, Customer, Customer Code, Contact No, Driver, Driver Code, Driver Nationality, Start Date, End Date, Rental Days, Additional Notes, Notes, PO No, Status, Rate, Taxable Amount, VAT, Total Amount</code>. Rental Days, Taxable Amount, VAT, and Total Amount are all ignored on purpose — Days is always computed fresh, and Rate (not the VAT-inclusive Total) is what income is calculated from. An End Date is ignored while Status is Open (it's just an expected return date until the contract is actually closed). Re-pasting the same Agreement No updates that agreement instead of duplicating it. Plates not in your fleet are auto-flagged as Sub-Lease.</p>
           <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6}
             style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
-            placeholder={"15689, 98272-Z, Daily, 01/07/2026, Closed, 500\n15693, 9182-G, Daily, 02/07/2026, Open, 500"} />
+            placeholder={"Paste tab-separated rows here, straight from your export…"} />
           <button className="btn primary" style={{ marginTop: 8 }} onClick={parseBulk}>Import Agreements</button>
         </div>
       )}
@@ -5045,41 +5057,4 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
         <KpiCard label="Total Income" value={fmt(totals.income_actual, currency)} sub={`Budget ${fmt(totals.income_budget, currency)}`} diff={totals.income_actual - totals.income_budget} />
         <KpiCard label="Gross Profit" value={fmt(totals.gross_actual, currency)} sub={`Budget ${fmt(totals.gross_budget, currency)}`} diff={totals.gross_actual - totals.gross_budget} />
         <KpiCard label="EBITDA" value={fmt(totals.ebitda_actual, currency)} sub={`Budget ${fmt(totals.ebitda_budget, currency)}`} diff={totals.ebitda_actual - totals.ebitda_budget} />
-        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} rawValue={totals.netprofit_actual} signColor />
-      </div>
-
-      <div className="panel">
-        <h3>Income &amp; Net Profit Trend</h3>
-        <LineTrendSVG data={yearData} series={[
-          { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
-          { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
-          { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
-          { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
-        ]} />
-      </div>
-
-      <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
-
-      <div className="panel">
-        <h3>Occupancy Summary</h3>
-        <table>
-          <thead><tr><th>Car</th><th>Plate</th><th className="num">Avg Occupancy</th><th>Remarks</th></tr></thead>
-          <tbody>
-            {occRows.map(r => (
-              <tr key={r.vehicle.id}>
-                <td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
-                <td className="num">{r.avg === null ? '—' : (r.avg * 100).toFixed(0) + '%'}</td>
-                <td>{r.avg === null ? '—' : (r.avg >= 0.5 ? 'OK' : 'Workout')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
-</body>
-</html>
+        <KpiCard label="Net Profit" value={fmt(totals.netprofit_actual, currency)} sub={`Budget ${fmt(totals.netprofit_budget, currency)}`} diff={totals.netprofit_actual - totals.netprofit_budget} rawValue={totals.netprofit_actual} 
