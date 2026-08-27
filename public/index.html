@@ -238,13 +238,42 @@ function periodsBetween(from, to) {
 
 // Sums the monthly-allocated cost of every insurance policy active during `period` (a
 // policy's premium is split evenly across the whole months it covers).
+// Correct "how many months apart" for two dates, matching Excel's EDATE semantics — e.g.
+// 24-Jul-2026 to 24-Aug-2027 is exactly 13 months, not 14. Naively counting distinct
+// "YYYY-MM" labels touched overcounts by one whenever a policy doesn't start/end on the
+// 1st of the month, since both the partial first and partial last month get counted as
+// full buckets even though together they represent one elapsed month, not two.
+function monthsBetweenDates(startDateStr, endDateStr) {
+  const start = new Date(startDateStr), end = new Date(endDateStr);
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) months -= 1;
+  return Math.max(1, months);
+}
+
+// Days of actual policy coverage that fall within a given calendar month — same
+// day-precise proration pattern already used for Agreements, applied here so a policy's
+// premium is split by real days covered per month rather than divided evenly across
+// however many calendar-month labels the term happens to touch.
+function policyDaysInMonth(policy, period) {
+  const [y, m] = period.split('-').map(Number);
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0);
+  const start = new Date(policy.startDate);
+  const end = new Date(policy.endDate);
+  const rangeStart = start > monthStart ? start : monthStart;
+  const rangeEnd = end < monthEnd ? end : monthEnd;
+  if (rangeEnd < rangeStart) return 0;
+  return Math.round((rangeEnd - rangeStart) / 86400000) + 1;
+}
+
 function insuranceMonthlyTotal(period, insurancePolicies) {
   let total = 0;
   (insurancePolicies || []).forEach(p => {
     if (!p.startDate || !p.endDate) return;
-    const months = periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7));
-    if (!months.includes(period)) return;
-    total += num(p.premiumAmount) / (months.length || 1);
+    const totalDays = Math.round((new Date(p.endDate) - new Date(p.startDate)) / 86400000) + 1;
+    const daysThisMonth = policyDaysInMonth(p, period);
+    if (daysThisMonth <= 0) return;
+    total += num(p.premiumAmount) * (daysThisMonth / (totalDays || 1));
   });
   return total;
 }
@@ -1719,7 +1748,7 @@ function App() {
           {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
-          {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} rangeMonths={rangeMonths} />}
           {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
           {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} />}
           {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
@@ -4831,7 +4860,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   );
 }
 
-function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency, deletePin }) {
+function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency, deletePin, rangeMonths }) {
   const emptyForm = { plate: '', vehicleValue: '', premiumAmount: '', startDate: '', endDate: '' };
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState(null);
@@ -4840,7 +4869,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency
 
   function vehicleByPlate(plate) { return findVehicleByPlate(vehicles, plate); }
   function vehicleNameFor(plate) { const v = vehicleByPlate(plate); return v ? v.name : null; }
-  function monthsCovered(p) { return p.startDate && p.endDate ? periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7)).length : 0; }
+  function monthsCovered(p) { return p.startDate && p.endDate ? monthsBetweenDates(p.startDate, p.endDate) : 0; }
 
   const matchedVehicle = vehicleByPlate(form.plate);
 
@@ -4910,8 +4939,66 @@ function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency
         <div style={{ display: 'flex', gap: 8 }}>
           <div className={`chip ${view === 'list' ? 'selected' : ''}`} onClick={() => setView('list')}>Add / Edit</div>
           <div className={`chip ${view === 'import' ? 'selected' : ''}`} onClick={() => setView('import')}>Import / Paste</div>
+          <div className={`chip ${view === 'schedule' ? 'selected' : ''}`} onClick={() => setView('schedule')}>Monthly Schedule</div>
         </div>
       </div>
+
+      {view === 'schedule' && (
+        <div className="panel" style={{ overflowX: 'auto' }}>
+          <h3>Insurance Cost Schedule — {rangeMonths && rangeMonths.length ? `${monthLabel(rangeMonths[0])} – ${monthLabel(rangeMonths[rangeMonths.length - 1])}` : 'No period selected'}</h3>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}. Uses the Report From / Report To range set at the top of the app. Each month's figure is the real day-precise share of premium for that vehicle's policy that month — the same figure feeding P&L Entry's Insurance Charges.</p>
+          {!rangeMonths || rangeMonths.length === 0 ? (
+            <p style={{ color: 'var(--muted)', fontSize: 13 }}>Pick a Report From / Report To range at the top of the app to see the schedule.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>S.No</th><th>Vehicle</th><th>Plate</th>
+                  {rangeMonths.map(p => <th key={p} className="num">{monthLabel(p)}</th>)}
+                  <th className="num">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vehicles.map((v, i) => {
+                  const vehiclePolicies = policies.filter(p => p.vehicleId === v.id);
+                  const monthVals = rangeMonths.map(p => insuranceMonthlyTotal(p, vehiclePolicies));
+                  const rowTotal = monthVals.reduce((a, b) => a + b, 0);
+                  if (vehiclePolicies.length === 0) return null;
+                  return (
+                    <tr key={v.id}>
+                      <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td>
+                      {monthVals.map((val, mi) => <td key={mi} className="num">{val ? fmtNum(val) : '—'}</td>)}
+                      <td className="num" style={{ fontWeight: 700 }}>{fmtNum(rowTotal)}</td>
+                    </tr>
+                  );
+                })}
+                {(() => {
+                  // Any policy whose vehicleId no longer matches a current vehicle (e.g. the
+                  // vehicle was deleted after the policy was created) would otherwise vanish
+                  // from this schedule silently — surfaced here instead, so the Fleet Total
+                  // below always matches the real P&L figure exactly, with no hidden gap.
+                  const orphaned = policies.filter(p => !vehicles.some(v => v.id === p.vehicleId));
+                  if (orphaned.length === 0) return null;
+                  const monthVals = rangeMonths.map(p => insuranceMonthlyTotal(p, orphaned));
+                  const rowTotal = monthVals.reduce((a, b) => a + b, 0);
+                  return (
+                    <tr style={{ color: 'var(--amber)' }}>
+                      <td>—</td><td colSpan={2} title="Policy references a vehicle that no longer exists in your fleet">⚠ Orphaned Policies ({orphaned.length})</td>
+                      {monthVals.map((val, mi) => <td key={mi} className="num">{val ? fmtNum(val) : '—'}</td>)}
+                      <td className="num" style={{ fontWeight: 700 }}>{fmtNum(rowTotal)}</td>
+                    </tr>
+                  );
+                })()}
+                <tr className="subtotal-row">
+                  <td colSpan={3}>Fleet Total</td>
+                  {rangeMonths.map((p, mi) => <td key={mi} className="num">{fmtNum(insuranceMonthlyTotal(p, policies))}</td>)}
+                  <td className="num">{fmtNum(rangeMonths.reduce((s, p) => s + insuranceMonthlyTotal(p, policies), 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {view === 'import' && (
         <div className="panel">
@@ -4951,6 +5038,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency
         </div>
       </div>
       )}
+      {view === 'list' && (
       <div className="panel">
         <h3>All Policies ({policies.length})</h3>
         <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
@@ -4982,6 +5070,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
