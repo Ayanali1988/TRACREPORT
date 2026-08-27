@@ -172,10 +172,10 @@ const defaultLineItems = () => ({
 // Admin sees everything; Manager loses Settings/Financing/Feasibility/Personal Finance;
 // Viewer loses every entry/setup screen and sees only report-style tabs.
 const ADMIN_ONLY_TABS = ['settings'];
-const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance'];
+const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance', 'budget-planning'];
 const VIEWER_HIDDEN_TABS = [...ADMIN_ONLY_TABS, ...ADMIN_MANAGER_TABS, 'financing', 'feasibility'];
 function TAB_GROUPS_FOR_ROLE(role) {
-  const all = ['dashboard', 'quick-review', 'pnl-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
+  const all = ['dashboard', 'quick-review', 'pnl-compare', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
   if (role === 'admin') return all;
   if (role === 'manager') return all.filter(t => !ADMIN_ONLY_TABS.includes(t) && t !== 'financing' && t !== 'feasibility' && t !== 'personal-finance');
   return all.filter(t => !VIEWER_HIDDEN_TABS.includes(t) && t !== 'personal-finance');
@@ -221,6 +221,7 @@ function evalExpr(str) {
   }
 }
 function monthsOf(year) { return Array.from({ length: 12 }, (_, i) => year + '-' + String(i + 1).padStart(2, '0')); }
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -389,6 +390,14 @@ function fmt(n, currency) {
   const rounded = Math.round(num(n));
   if (rounded === 0) return '-';
   return currency + ' ' + rounded.toLocaleString('en-US');
+}
+// Same rounding/zero-dash behavior as fmt(), but without repeating the currency code on
+// every cell — for dense tables where a single "All figures in {currency}" note up top
+// already establishes the currency once.
+function fmtNum(n) {
+  const rounded = Math.round(num(n));
+  if (rounded === 0) return '-';
+  return rounded.toLocaleString('en-US');
 }
 function pctStr(n) { return isFinite(n) ? (n * 100).toFixed(1) + '%' : '—'; }
 
@@ -956,16 +965,7 @@ function App() {
   const [printFeasibilityId, setPrintFeasibilityId] = useState(null);
   const [printMode, setPrintMode] = useState('cumulative');
   const [printMargin, setPrintMargin] = useState('10mm');
-
-  useEffect(() => {
-    let styleEl = document.getElementById('dynamic-print-margin');
-    if (!styleEl) {
-      styleEl = document.createElement('style');
-      styleEl.id = 'dynamic-print-margin';
-      document.head.appendChild(styleEl);
-    }
-    styleEl.textContent = `@page { size: A4 landscape; margin: ${printMargin}; }`;
-  }, [printMargin]);
+  const [printOrientation, setPrintOrientation] = useState('landscape');
 
   // Use the uploaded company logo as the browser tab icon (favicon), and the company name
   // as the tab title, instead of the browser's generic default globe icon.
@@ -984,9 +984,41 @@ function App() {
 
   const [reportFrom, setReportFrom] = useState(year + '-01');
   const [reportTo, setReportTo] = useState(year + '-12');
+
+  useEffect(() => {
+    let styleEl = document.getElementById('dynamic-print-margin');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'dynamic-print-margin';
+      document.head.appendChild(styleEl);
+    }
+    // Auto-fit: the more months a report spans, the more columns it has to fit across the
+    // same physical page width, so font size and cell padding scale down as the month count
+    // grows — and Portrait (narrower) scales down a step more aggressively than Landscape
+    // for the same month count, since it has less width to work with.
+    const monthCount = periodsBetween(reportFrom, reportTo).length || 1;
+    const isPortrait = printOrientation === 'portrait';
+    const thresholds = isPortrait ? [2, 4, 7] : [3, 6, 10];
+    let fontSize = 10.5, pad = '3px 6px';
+    if (monthCount > thresholds[2]) { fontSize = 7; pad = '1.5px 3px'; }
+    else if (monthCount > thresholds[1]) { fontSize = 8; pad = '2px 3.5px'; }
+    else if (monthCount > thresholds[0]) { fontSize = 9; pad = '2.5px 5px'; }
+    // table-layout: fixed forces columns to share the page width evenly once there are many
+    // of them — without it, a wide table with many columns keeps its natural content width
+    // and simply overflows the page edge, no matter how small the font gets.
+    const tableLayout = monthCount > thresholds[0] ? 'fixed' : 'auto';
+    styleEl.textContent = `
+      @page { size: A4 ${printOrientation}; margin: ${printMargin}; }
+      .print-only table { font-size: ${fontSize}px !important; table-layout: ${tableLayout}; word-break: break-word; }
+      .print-only table th, .print-only table td { padding: ${pad} !important; }
+    `;
+  }, [printMargin, printOrientation, reportFrom, reportTo]);
+
   const [pnlEntryPeriod, setPnlEntryPeriod] = useState(year + '-01');
   const [vehicleEntryPeriod, setVehicleEntryPeriod] = useState(year + '-01');
   const [monthlyRemarks, setMonthlyRemarks] = useState({});
+  const [occupancyRemarks, setOccupancyRemarks] = useState({});
+  const [vehicleRevenueRemarks, setVehicleRevenueRemarks] = useState({});
   const [adminNotes, setAdminNotes] = useState([]);
   const [insurancePolicies, setInsurancePolicies] = useState([]);
   const [insuranceOverrides, setInsuranceOverrides] = useState({});
@@ -1032,7 +1064,7 @@ function App() {
   }
 
   function currentFullState() {
-    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview };
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks };
   }
 
   async function performSave(pwOverride) {
@@ -1104,6 +1136,8 @@ function App() {
         if (data.agreements) setAgreements(data.agreements);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
+        if (data.occupancyRemarks) setOccupancyRemarks(data.occupancyRemarks);
+        if (data.vehicleRevenueRemarks) setVehicleRevenueRemarks(data.vehicleRevenueRemarks);
       }
       setPassword(savedPw);
       setLicenseKey(savedLic);
@@ -1148,7 +1182,7 @@ function App() {
     if (!loaded || !authed) return;
     const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, loaded, authed]);
 
   // Keep every month's insurance Actual figure in sync with the auto-calculated policy
   // total (skipping any month the user has explicitly overridden) — runs across all
@@ -1323,6 +1357,8 @@ function App() {
         if (data.agreements) setAgreements(data.agreements);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
+        if (data.occupancyRemarks) setOccupancyRemarks(data.occupancyRemarks);
+        if (data.vehicleRevenueRemarks) setVehicleRevenueRemarks(data.vehicleRevenueRemarks);
         window.alert('Backup restored successfully.');
       } catch (e) {
         window.alert('Could not read this file — make sure it is a backup .json file downloaded from this app.');
@@ -1508,6 +1544,7 @@ function App() {
                 <div className="nav-group-label">Reports</div>
                 <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
                 <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
+                <button className={`navbtn ${activeTab === 'yoy-compare' ? 'active' : ''}`} onClick={() => setActiveTab('yoy-compare')}>📅 Year-over-Year</button>
                 <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
                 <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
                 {allowed.includes('financing') && <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>}
@@ -1520,6 +1557,7 @@ function App() {
                 {allowed.includes('veh-revenue') && <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>}
                 {allowed.includes('agreements') && <button className={`navbtn ${activeTab === 'agreements' ? 'active' : ''}`} onClick={() => setActiveTab('agreements')}>📜 Agreements</button>}
                 {allowed.includes('feasibility') && <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>}
+                {allowed.includes('budget-planning') && <button className={`navbtn ${activeTab === 'budget-planning' ? 'active' : ''}`} onClick={() => setActiveTab('budget-planning')}>🗓 Budget Planning</button>}
                 {allowed.includes('insurance') && <button className={`navbtn ${activeTab === 'insurance' ? 'active' : ''}`} onClick={() => setActiveTab('insurance')}>🛡 Insurance Policies</button>}
 
                 {showAdminGroup && <div className="nav-group-label">Administration</div>}
@@ -1558,6 +1596,10 @@ function App() {
             {saveStatus === 'error' && <span style={{ color: 'var(--red)' }}>● Not saved</span>}
           </div>
           <div className="actions">
+            <select value={printOrientation} onChange={e => setPrintOrientation(e.target.value)} title="Page orientation for print/PDF export" style={{ padding: '5px 8px', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12.5 }}>
+              <option value="landscape">Landscape</option>
+              <option value="portrait">Portrait</option>
+            </select>
             <select value={printMargin} onChange={e => setPrintMargin(e.target.value)} title="Page margin for print/PDF export" style={{ padding: '5px 8px', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12.5 }}>
               <option value="6mm">Narrow Margin</option>
               <option value="10mm">Normal Margin</option>
@@ -1638,18 +1680,20 @@ function App() {
           {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} />}
           {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
-          {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} />}
+          {activeTab === 'yoy-compare' && <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} remarks={occupancyRemarks} setRemarks={setOccupancyRemarks} />}
           {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} currency={currency} />}
-          {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} />}
+          {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} remarks={vehicleRevenueRemarks} setRemarks={setVehicleRevenueRemarks} />}
           {activeTab === 'model-compare' && <ModelComparePanel rangeMonths={rangeMonths} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} setDefaultUsefulLife={setDefaultUsefulLife} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'feasibility' && <FeasibilityPanel studies={feasibilityStudies} setStudies={setFeasibilityStudies} currency={currency} deletePin={deletePin} defaultWorkingDays={baseDays} onPrintStudy={handlePrintFeasibilityStudy} />}
           {activeTab === 'financing' && <FinancingPanel loans={loans} setLoans={setLoans} vehicles={vehicles} currency={currency} deletePin={deletePin} onPrintLoan={handlePrintLoan} selectedLoanIds={selectedLoanIds} onToggleLoanSelect={toggleLoanSelect} onSelectAllLoans={() => setSelectedLoanIds([])} onSelectOnlyLoan={selectOnlyLoan} />}
           {activeTab === 'chart-of-accounts' && <ChartOfAccountsPanel lineItems={lineItems} setLineItems={setLineItems} deletePin={deletePin} />}
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
-          {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} />}
           {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} />}
           {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
           {activeTab === 'investors-fleet' && <InvestorsFleetPanel vehicles={vehicles} vehicleRevenue={vehicleRevenue} rangeMonths={rangeMonths} currency={currency} />}
           {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
@@ -1671,11 +1715,13 @@ function App() {
           <div style={{ padding: 24 }}>
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`P&L Budget vs Actual · ${rangeMonths.map(monthLabel).join(' – ')}`} />
             <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
+            <NotesSection rangeMonths={rangeMonths} sources={[{ remarks: monthlyRemarks, label: 'P&L Remarks' }]} />
           </div>
         ) : printMode === 'occupancy' ? (
           <div style={{ padding: 24 }}>
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Occupancy Report · ${rangeMonths.map(monthLabel).join(' – ')}`} />
             <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+            <NotesSection rangeMonths={rangeMonths} sources={[{ remarks: occupancyRemarks, label: 'Occupancy Remarks' }, { remarks: vehicleRevenueRemarks, label: 'Vehicle Revenue Remarks' }]} />
           </div>
         ) : printMode === 'model' ? (
           <div style={{ padding: 24 }}>
@@ -1687,7 +1733,7 @@ function App() {
         ) : printMode === 'financing' ? (
           <FinancingPrintReport loans={financingReportLoans} currency={currency} companyName={companyName} logoDataUrl={logoDataUrl} />
         ) : (
-          <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+          <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} monthlyRemarks={monthlyRemarks} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />
         )}
       </div>
     </div>
@@ -1858,22 +1904,25 @@ function MonthNavigator({ period, setPeriod }) {
 function PeriodNavigator({ rangeMonths, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
   const isSingleMonth = rangeMonths.length <= 1;
+  // Shifts the whole selected range forward/back by one month, preserving its width — a
+  // 3-month range stays a 3-month range, just moved; it never silently collapses to a
+  // single month the way an anchor-only shift would.
   function shiftMonth(delta) {
-    const anchor = rangeMonths[0] || reportFrom;
-    const [y, m] = anchor.split('-').map(Number);
-    const d = new Date(y, m - 1 + delta, 1);
-    const next = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-    setReportFrom(next);
-    setReportTo(next);
+    const [fy, fm] = reportFrom.split('-').map(Number);
+    const [ty, tm] = reportTo.split('-').map(Number);
+    const newFrom = new Date(fy, fm - 1 + delta, 1);
+    const newTo = new Date(ty, tm - 1 + delta, 1);
+    setReportFrom(newFrom.getFullYear() + '-' + String(newFrom.getMonth() + 1).padStart(2, '0'));
+    setReportTo(newTo.getFullYear() + '-' + String(newTo.getMonth() + 1).padStart(2, '0'));
   }
   return (
     <div className="panel no-print" style={{ textAlign: 'center' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-        <button className="btn" onClick={() => shiftMonth(-1)} title="Previous month">◀ Back</button>
+        <button className="btn" onClick={() => shiftMonth(-1)} title="Previous period">◀ Back</button>
         <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--navy)', minWidth: 160 }}>{periodLabel}</div>
-        <button className="btn" onClick={() => shiftMonth(1)} title="Next month">Next ▶</button>
+        <button className="btn" onClick={() => shiftMonth(1)} title="Next period">Next ▶</button>
       </div>
-      {!isSingleMonth && <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>Currently viewing a multi-month range — Next/Back here jumps to a single month. Use Report From/To at the top for a custom range.</p>}
+      {!isSingleMonth && <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 6 }}>Viewing a {rangeMonths.length}-month range — Next/Back moves the whole range by one month, keeping the same width.</p>}
     </div>
   );
 }
@@ -1892,6 +1941,113 @@ function KpiCard({ label, value, sub, diff, rawValue, signColor }) {
 /* ---------------- P&L Entry ---------------- */
 
 /* ---------------- Chart of Accounts ---------------- */
+
+function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency, year, deletePin }) {
+  const [sourceYear, setSourceYear] = useState(year - 1);
+  const [targetYear, setTargetYear] = useState(year);
+  const [basis, setBasis] = useState('actual'); // 'actual' | 'budget' — what the clone is based on
+  const [sectionPct, setSectionPct] = useState({ revenue: 0, direct: 0, indirect: 0, interest: 0, belowLine: 0 });
+  const [applied, setApplied] = useState(false);
+
+  const sourceMonths = monthsOf(sourceYear);
+  const targetMonths = monthsOf(targetYear);
+
+  // Every leaf key that actually holds a stored Budget/Actual value — a sub-account's own
+  // key when the parent has sub-accounts, otherwise the parent's own key. This is what gets
+  // written to on Apply; a parent with sub-accounts is never written directly, since its
+  // Budget is always auto-summed from its sub-accounts elsewhere in the app.
+  function leafItemsFor(sectionKey) {
+    const leaves = [];
+    lineItems[sectionKey].forEach(item => {
+      if (item.subAccounts && item.subAccounts.length) {
+        item.subAccounts.forEach(sub => leaves.push({ key: sub.key, label: `${item.label} — ${sub.label}` }));
+      } else {
+        leaves.push({ key: item.key, label: item.label });
+      }
+    });
+    return leaves;
+  }
+
+  function sourceTotalFor(key) {
+    return sourceMonths.reduce((s, p) => s + num((monthlyData[p] || {})[key] && monthlyData[p][key][basis]), 0);
+  }
+
+  const sectionPreview = Object.keys(SECTION_META).map(sectionKey => {
+    const leaves = leafItemsFor(sectionKey);
+    const sourceTotal = leaves.reduce((s, l) => s + sourceTotalFor(l.key), 0);
+    const pct = num(sectionPct[sectionKey]);
+    const newTotal = sourceTotal * (1 + pct / 100);
+    return { sectionKey, title: SECTION_META[sectionKey].title, sourceTotal, avgMonthly: sourceTotal / 12, newTotal, leafCount: leaves.length };
+  });
+
+  function applyClone() {
+    if (!confirmDelete(`overwriting ${targetYear}'s Budget figures across all ${targetMonths.length} months from this clone — any Budget already entered for ${targetYear} will be replaced`, deletePin)) return;
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      Object.keys(SECTION_META).forEach(sectionKey => {
+        const leaves = leafItemsFor(sectionKey);
+        const pct = num(sectionPct[sectionKey]);
+        leaves.forEach(l => {
+          sourceMonths.forEach((sp, mi) => {
+            const tp = targetMonths[mi];
+            const sourceVal = num((prev[sp] || {})[l.key] && prev[sp][l.key][basis]);
+            const newBudget = sourceVal * (1 + pct / 100);
+            next[tp] = { ...(next[tp] || {}), [l.key]: { ...((next[tp] || {})[l.key] || {}), budget: newBudget } };
+          });
+        });
+      });
+      return next;
+    });
+    setApplied(true);
+  }
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Budget Planning</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
+          Prepare next year's budget ahead of time by cloning a source year's figures forward, with a custom % adjustment per section. Nothing is written until you click Apply.
+        </p>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="field"><label>Source Year</label><input type="number" value={sourceYear} onChange={e => { setSourceYear(Number(e.target.value)); setApplied(false); }} style={{ width: 90 }} /></div>
+          <div className="field"><label>Target Year</label><input type="number" value={targetYear} onChange={e => { setTargetYear(Number(e.target.value)); setApplied(false); }} style={{ width: 90 }} /></div>
+          <div className="field">
+            <label>Base On</label>
+            <select value={basis} onChange={e => { setBasis(e.target.value); setApplied(false); }}>
+              <option value="actual">Actual (what really happened)</option>
+              <option value="budget">Budget (what was planned)</option>
+            </select>
+          </div>
+        </div>
+        {sourceYear === targetYear && <p style={{ color: 'var(--red)', fontSize: 12.5, marginTop: 8 }}>⚠ Source and Target Year are the same — pick a different Target Year before applying.</p>}
+      </div>
+
+      <div className="panel">
+        <h3>Adjustment % by Section</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Suggested starting point: each section shows {sourceYear}'s {basis} total and average monthly figure — a reasonable anchor before you decide the adjustment.</p>
+        <table>
+          <thead><tr><th>Section</th><th className="num">{sourceYear} Total</th><th className="num">Avg / Month</th><th>Adjustment %</th><th className="num">New {targetYear} Budget Total</th></tr></thead>
+          <tbody>
+            {sectionPreview.map(s => (
+              <tr key={s.sectionKey}>
+                <td>{s.title}</td>
+                <td className="num">{fmtNum(s.sourceTotal)}</td>
+                <td className="num">{fmtNum(s.avgMonthly)}</td>
+                <td>
+                  <input type="number" value={sectionPct[s.sectionKey]} onChange={e => { setSectionPct({ ...sectionPct, [s.sectionKey]: e.target.value }); setApplied(false); }} style={{ width: 70 }} />%
+                </td>
+                <td className="num" style={{ fontWeight: 700 }}>{fmtNum(s.newTotal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>All figures in {currency}. A positive % increases the budget (e.g. Revenue +8%); a negative % decreases it (e.g. Direct Expenses −5% if you're cutting costs).</p>
+        <button className="btn primary" style={{ marginTop: 10 }} onClick={applyClone} disabled={sourceYear === targetYear}>Apply to {targetYear}</button>
+        {applied && <span style={{ marginLeft: 10, color: 'var(--green)', fontSize: 13 }}>✓ Applied — {targetYear}'s Budget has been updated. Check P&L Entry for {targetYear} to review or fine-tune individual line items.</span>}
+      </div>
+    </div>
+  );
+}
 
 function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
   const [newItemText, setNewItemText] = useState({});
@@ -2019,6 +2175,69 @@ function ChartOfAccountsPanel({ lineItems, setLineItems, deletePin }) {
               onKeyDown={e => { if (e.key === 'Enter') addItem(sectionKey); }} />
             <button className="btn small" onClick={() => addItem(sectionKey)}>+ Add</button>
           </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Shared remarks-box helpers. Remarks are stored per period as either a plain string
+// (older data — always treated as "prints in report" for backward compatibility) or an
+// object { text, print } once the print toggle has been touched.
+function getRemarkEntry(remarksObj, period) {
+  const raw = (remarksObj || {})[period];
+  if (raw === undefined || raw === null) return { text: '', print: true };
+  if (typeof raw === 'string') return { text: raw, print: true };
+  return { text: raw.text || '', print: raw.print !== false };
+}
+function setRemarkText(setRemarks, remarksObj, period, text) {
+  const existing = getRemarkEntry(remarksObj, period);
+  setRemarks({ ...remarksObj, [period]: { text, print: existing.print } });
+}
+function toggleRemarkPrint(setRemarks, remarksObj, period) {
+  const existing = getRemarkEntry(remarksObj, period);
+  setRemarks({ ...remarksObj, [period]: { text: existing.text, print: !existing.print } });
+}
+
+function RemarksBox({ title, remarks, setRemarks, period, placeholder }) {
+  const entry = getRemarkEntry(remarks, period);
+  return (
+    <div className="panel">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>{title} — {monthLabel(period)}</h3>
+        <button className="btn small" onClick={() => toggleRemarkPrint(setRemarks, remarks, period)}>
+          {entry.print ? '🖨 Prints in Report' : '🖥 Screen Only'}
+        </button>
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, marginBottom: 8 }}>
+        {entry.print ? 'Appears in the "Notes & Recommendations" section at the end of exported reports for this month.' : 'Screen-only — will not appear in any exported or printed report.'}
+      </p>
+      <textarea value={entry.text} onChange={e => setRemarkText(setRemarks, remarks, period, e.target.value)}
+        rows={4} placeholder={placeholder}
+        style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+    </div>
+  );
+}
+
+// Renders at the very end of an exported report — collects every period's remarks (from
+// whichever entry sheets are relevant to that report) that are flagged to print, grouped by
+// month and source sheet, so management commentary always lands in one predictable place.
+function NotesSection({ rangeMonths, sources }) {
+  const entries = [];
+  (rangeMonths || []).forEach(period => {
+    sources.forEach(src => {
+      const e = getRemarkEntry(src.remarks, period);
+      if (e.print && e.text && e.text.trim()) entries.push({ period, label: src.label, text: e.text });
+    });
+  });
+  if (entries.length === 0) return null;
+  return (
+    <div className="panel" style={{ marginTop: 20, breakBefore: 'page' }}>
+      <h3>Notes &amp; Recommendations</h3>
+      {entries.map((e, i) => (
+        <div key={i} style={{ marginBottom: 12, paddingBottom: 10, borderBottom: i < entries.length - 1 ? '1px solid var(--line)' : 'none' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--steel)', marginBottom: 3 }}>{monthLabel(e.period)} — {e.label}</div>
+          <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{e.text}</div>
         </div>
       ))}
     </div>
@@ -2295,18 +2514,127 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
         <KpiCard label="Net Profit" value={fmt(c.netprofit_actual, currency)} sub={`Budget ${fmt(c.netprofit_budget, currency)}`} diff={c.netprofit_actual - c.netprofit_budget} rawValue={c.netprofit_actual} signColor />
       </div>
 
-      <div className="panel">
-        <h3>Remarks &amp; Recommendations — {monthLabel(period)}</h3>
-        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Management-level commentary for this month. Unlike the per-row Notes above, this also appears in printed/exported PDF reports.</p>
-        <textarea value={monthlyRemarks[period] || ''} onChange={e => setMonthlyRemarks(prev => ({ ...prev, [period]: e.target.value }))}
-          rows={4} placeholder="e.g. Revenue down due to 2 vehicles under maintenance; expect recovery next month once Insurance renewal completes."
-          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
-      </div>
+      <RemarksBox title="Remarks &amp; Recommendations" remarks={monthlyRemarks} setRemarks={setMonthlyRemarks} period={period}
+        placeholder="e.g. Revenue down due to 2 vehicles under maintenance; expect recovery next month once Insurance renewal completes." />
     </div>
   );
 }
 
 /* ---------------- P&L Compare (uses global report range) ---------------- */
+
+function YoyComparePanel({ lineItems, monthlyData, currency, vehicles, occupancy, baseDays }) {
+  const nowYear = new Date().getFullYear();
+  const [yearA, setYearA] = useState(nowYear - 1);
+  const [yearB, setYearB] = useState(nowYear);
+  const [basis, setBasis] = useState('actual'); // 'actual' | 'budget'
+
+  const monthsA = monthsOf(yearA);
+  const monthsB = monthsOf(yearB);
+  const totalsA = rangeAggregate(monthsA, monthlyData, lineItems);
+  const totalsB = rangeAggregate(monthsB, monthlyData, lineItems);
+
+  function occAvgForYear(monthKeys) {
+    const pcts = [];
+    vehicles.forEach(v => {
+      monthKeys.forEach(p => {
+        const d = (occupancy[p] || {})[v.id];
+        if (d !== undefined && d !== '') pcts.push(num(d) / baseDays);
+      });
+    });
+    return pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null;
+  }
+  const occA = occAvgForYear(monthsA);
+  const occB = occAvgForYear(monthsB);
+
+  const rows = [
+    { label: 'Total Revenue', a: totalsA[`income_${basis}`], b: totalsB[`income_${basis}`] },
+    { label: 'Total Expenses', a: totalsA[`totalexp_${basis}`], b: totalsB[`totalexp_${basis}`] },
+    { label: 'Gross Profit', a: totalsA[`gross_${basis}`], b: totalsB[`gross_${basis}`] },
+    { label: 'EBITDA', a: totalsA[`ebitda_${basis}`], b: totalsB[`ebitda_${basis}`] },
+    { label: 'Net Profit / Loss', a: totalsA[`netprofit_${basis}`], b: totalsB[`netprofit_${basis}`] },
+  ];
+
+  const monthlyRows = MONTH_NAMES.map((mName, mi) => {
+    const pA = yearA + '-' + String(mi + 1).padStart(2, '0');
+    const pB = yearB + '-' + String(mi + 1).padStart(2, '0');
+    const cA = computeMonth(pA, monthlyData, lineItems);
+    const cB = computeMonth(pB, monthlyData, lineItems);
+    return { month: mName, incomeA: cA[`income_${basis}`], incomeB: cB[`income_${basis}`], netA: cA[`netprofit_${basis}`], netB: cB[`netprofit_${basis}`] };
+  });
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Year-over-Year Comparison</h3>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Compares two full years side by side, month by month, using whichever periods you've already entered data for — no separate setup needed.</p>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="field"><label>Year A (baseline)</label><input type="number" value={yearA} onChange={e => setYearA(Number(e.target.value))} style={{ width: 90 }} /></div>
+          <div className="field"><label>Year B (comparison)</label><input type="number" value={yearB} onChange={e => setYearB(Number(e.target.value))} style={{ width: 90 }} /></div>
+          <div className="field">
+            <label>Basis</label>
+            <select value={basis} onChange={e => setBasis(e.target.value)}>
+              <option value="actual">Actual</option>
+              <option value="budget">Budget</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>Annual Totals — {basis === 'actual' ? 'Actual' : 'Budget'}</h3>
+        <table>
+          <thead><tr><th>Metric</th><th className="num">{yearA}</th><th className="num">{yearB}</th><th className="num">Change</th><th>Var %</th></tr></thead>
+          <tbody>
+            {rows.map(r => {
+              const v = rowVariance(r.a, r.b, r.label.includes('Expense') ? 'expense' : 'income');
+              return (
+                <tr key={r.label}>
+                  <td>{r.label}</td>
+                  <td className="num">{fmt(r.a, currency)}</td>
+                  <td className="num">{fmt(r.b, currency)}</td>
+                  <td className="num">{fmt(r.b - r.a, currency)}</td>
+                  <td><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(Math.abs(v.pct))} {r.b >= r.a ? '▲' : '▼'}</span></td>
+                </tr>
+              );
+            })}
+            <tr>
+              <td>Avg Fleet Occupancy</td>
+              <td className="num">{occA === null ? '—' : pctStr(occA)}</td>
+              <td className="num">{occB === null ? '—' : pctStr(occB)}</td>
+              <td className="num">{occA === null || occB === null ? '—' : pctStr(occB - occA)}</td>
+              <td>{occA !== null && occB !== null && <span className={`badge ${occB >= occA ? 'pos' : 'neg'}`}>{occB >= occA ? '▲' : '▼'}</span>}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <h3>Income by Month — {yearA} vs {yearB}</h3>
+        <GroupedBarChart data={monthlyRows.map(r => ({ label: r.month, [String(yearA)]: r.incomeA, [String(yearB)]: r.incomeB }))}
+          series={[{ key: String(yearA), label: String(yearA), color: '#C9D6DC' }, { key: String(yearB), label: String(yearB), color: '#2D6E8E' }]} height={200} />
+      </div>
+
+      <div className="panel" style={{ overflowX: 'auto' }}>
+        <h3>Month-by-Month Detail</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
+        <table>
+          <thead><tr><th>Month</th><th className="num">{yearA} Income</th><th className="num">{yearB} Income</th><th className="num">{yearA} Net Profit</th><th className="num">{yearB} Net Profit</th></tr></thead>
+          <tbody>
+            {monthlyRows.map(r => (
+              <tr key={r.month}>
+                <td>{r.month}</td>
+                <td className="num">{fmtNum(r.incomeA)}</td>
+                <td className="num">{fmtNum(r.incomeB)}</td>
+                <td className="num" style={{ color: r.netA >= 0 ? 'var(--ink)' : 'var(--red)' }}>{fmtNum(r.netA)}</td>
+                <td className="num" style={{ color: r.netB >= 0 ? 'var(--ink)' : 'var(--red)' }}>{fmtNum(r.netB)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const yearData = monthKeys.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
@@ -2350,14 +2678,25 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
       {setReportFrom && <PeriodNavigator rangeMonths={monthKeys} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
       <div className="grid-2">
         <div className="panel">
-          <h3>Income &amp; Net Profit Trend</h3>
-          <LineTrendSVG data={yearData} series={[
-            { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
-            { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
-            { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
-            { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
-          ]} />
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>■ Green = Income · ■ Blue = Net Profit · dashed = Budget</div>
+          <h3>Income &amp; Net Profit Trend{monthKeys.length === 1 ? ` — ${monthLabel(monthKeys[0])}` : ''}</h3>
+          {monthKeys.length > 1 ? (
+            <>
+              <LineTrendSVG data={yearData} series={[
+                { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+                { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
+                { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+                { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
+              ]} />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>■ Green = Income · ■ Blue = Net Profit · dashed = Budget</div>
+            </>
+          ) : (
+            <GroupedBarChart data={[{ label: monthLabel(monthKeys[0]), ...yearData[0] }]} series={[
+              { key: 'income_budget', label: 'Budget Income', color: '#B9DCC7' },
+              { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+              { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#C9D6DC' },
+              { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+            ]} />
+          )}
         </div>
         <div className="panel">
           <h3>Budget vs Actual Income</h3>
@@ -2372,6 +2711,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
 
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Line-by-Line Comparison</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
         <table>
           <thead>
             <tr>
@@ -2429,8 +2769,8 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
                     const v = rowVariance(budget, actual, row.kind);
                     return (
                       <Fragment key={p}>
-                        <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{fmt(budget, currency)}</td>
-                        <td className="num" style={{ background: tint }}>{fmt(actual, currency)}</td>
+                        <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{fmtNum(budget)}</td>
+                        <td className="num" style={{ background: tint }}>{fmtNum(actual)}</td>
                         <td className="num" style={{ background: tint }}><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span></td>
                       </Fragment>
                     );
@@ -2443,8 +2783,8 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
                     </Fragment>
                   ) : (
                     <Fragment>
-                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700 }}>{fmt(ptBudget, currency)}</td>
-                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{fmt(ptActual, currency)}</td>
+                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700 }}>{fmtNum(ptBudget)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{fmtNum(ptActual)}</td>
                       <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{(() => { const v = rowVariance(ptBudget, ptActual, row.kind); return <span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span>; })()}</td>
                     </Fragment>
                   ))}
@@ -2460,7 +2800,7 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
 
 /* ---------------- Occupancy Entry ---------------- */
 
-function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
+function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, remarks, setRemarks }) {
   const [period, setPeriod] = useState(monthKeys[0]);
   const [search, setSearch] = useState('');
 
@@ -2479,14 +2819,14 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
         <button className="btn small" onClick={() => fillAll(0)}>Mark all as 0 days</button>
       </div>
       <table>
-        <thead><tr><th>S.No</th><th>Vehicle</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
+        <thead><tr><th>S.No</th><th>Vehicle</th><th>Model Year</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
         <tbody>
           {filtered.map((v, i) => {
             const d = (occupancy[period] || {})[v.id];
             const pctVal = d !== undefined && d !== '' ? num(d) / baseDays : null;
             return (
               <tr key={v.id}>
-                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.modelYear || '—'}</td><td>{v.plate}</td>
                 <td className="num"><input type="number" min="0" value={d === undefined ? '' : d} onChange={e => setDays(v.id, e.target.value)} /></td>
                 <td className="num">{pctVal === null ? '—' : <span className={`badge ${pctVal >= 0.5 ? 'pos' : 'neg'}`}>{pctStr(pctVal)}</span>}</td>
               </tr>
@@ -2494,6 +2834,8 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays }) {
           })}
         </tbody>
       </table>
+      <RemarksBox title="Occupancy Notes &amp; Recommendations" remarks={remarks} setRemarks={setRemarks} period={period}
+        placeholder="Anything worth noting about this month's occupancy — a car in service, an unusual gap, seasonal context…" />
     </div>
   );
 }
@@ -2587,6 +2929,7 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
       {vehicleRevenue && (
         <div className="panel" style={{ overflowX: 'auto' }}>
           <h3>Occupancy &amp; Income by Vehicle</h3>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
           <table>
             <thead><tr><th>S.No</th><th>Car</th><th>Plate</th><th className="num">Days Occupied</th><th className="num">Occupancy %</th><th className="num">Income</th><th className="num">Avg Rate / Day</th></tr></thead>
             <tbody>
@@ -2595,16 +2938,16 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
                   <td>{i + 1}</td><td>{r.vehicle.name}</td><td>{r.vehicle.plate}</td>
                   <td className="num">{r.days}</td>
                   <td className="num">{r.avg === null ? '—' : pctStr(r.avg)}</td>
-                  <td className="num">{fmt(r.income, currency)}</td>
-                  <td className="num">{r.avgRate ? fmt(r.avgRate, currency) : '—'}</td>
+                  <td className="num">{fmtNum(r.income)}</td>
+                  <td className="num">{r.avgRate ? fmtNum(r.avgRate) : '—'}</td>
                 </tr>
               ))}
               <tr className="subtotal-row">
                 <td colSpan={3}>Fleet Total</td>
                 <td className="num">{totalDays}</td>
                 <td className="num">{pctStr(fleetAvg)}</td>
-                <td className="num">{fmt(totalIncome, currency)}</td>
-                <td className="num">{fleetPerDay ? fmt(fleetPerDay, currency) : '—'}</td>
+                <td className="num">{fmtNum(totalIncome)}</td>
+                <td className="num">{fleetPerDay ? fmtNum(fleetPerDay) : '—'}</td>
               </tr>
             </tbody>
           </table>
@@ -2707,7 +3050,7 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
   );
 }
 
-function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenue, currency }) {
+function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenue, currency, remarks, setRemarks }) {
   const [period, setPeriod] = useState(monthKeys[0]);
   const [search, setSearch] = useState('');
 
@@ -2724,19 +3067,21 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
         <div className="field" style={{ maxWidth: 260 }}><label>Search</label><input placeholder="Filter vehicles…" value={search} onChange={e => setSearch(e.target.value)} /></div>
       </div>
       <table>
-        <thead><tr><th>S.No</th><th>Model / Name</th><th>Plate</th><th className="num">Income This Month ({currency})</th></tr></thead>
+        <thead><tr><th>S.No</th><th>Model / Name</th><th>Model Year</th><th>Plate</th><th className="num">Income This Month ({currency})</th></tr></thead>
         <tbody>
           {filtered.map((v, i) => {
             const val = (vehicleRevenue[period] || {})[v.id];
             return (
               <tr key={v.id}>
-                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.modelYear || '—'}</td><td>{v.plate}</td>
                 <td className="num"><input type="number" value={val === undefined ? '' : val} onChange={e => setAmount(v.id, e.target.value)} /></td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      <RemarksBox title="Vehicle Revenue Notes &amp; Recommendations" remarks={remarks} setRemarks={setRemarks} period={period}
+        placeholder="Anything worth noting about this month's vehicle income — a discount given, a one-off arrangement…" />
     </div>
   );
 }
@@ -3230,6 +3575,8 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
         {loans.length === 0 ? (
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add a loan for each financed vehicle — enter the car value, down payment, interest rate, fees, and term, then generate the payment schedule.</p>
         ) : (
+          <>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>All figures in {currency}</p>
           <table>
             <thead><tr><th>S.No</th><th>Vehicle</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th className="num">Principal Balance</th><th className="num">Interest Balance</th><th>Next Due</th><th></th></tr></thead>
             <tbody>
@@ -3240,11 +3587,11 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
                     <td>{i + 1}</td>
                     <td>{l.modelName || '(unnamed)'}</td>
                     <td>{l.lender || '—'}</td>
-                    <td className="num">{fmt(loanAmount(l), currency)}</td>
-                    <td className="num">{fmt(s.monthlyEMI, currency)}</td>
+                    <td className="num">{fmtNum(loanAmount(l))}</td>
+                    <td className="num">{fmtNum(s.monthlyEMI)}</td>
                     <td className="num">{pctStr(s.paidPct)}</td>
-                    <td className="num">{fmt(s.balancePrincipal, currency)}</td>
-                    <td className="num">{fmt(s.balanceInterest, currency)}</td>
+                    <td className="num">{fmtNum(s.balancePrincipal)}</td>
+                    <td className="num">{fmtNum(s.balanceInterest)}</td>
                     <td>{s.nextDue ? <span className={`badge ${s.overdue ? 'neg' : 'pos'}`}>{fullDateLabel(s.nextDue.dueDate)}{s.overdue ? ' overdue' : ''}</span> : <span className="badge pos">Paid off</span>}</td>
                     <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteLoan(l); }}>✕</button></td>
                   </tr>
@@ -3252,6 +3599,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
               })}
             </tbody>
           </table>
+          </>
         )}
       </div>
 
@@ -3598,7 +3946,7 @@ function LoanScheduleReport({ loan, companyName, currency }) {
 /* ---------------- Vehicles ---------------- */
 
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
-  const [form, setForm] = useState({ name: '', plate: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' });
+  const [form, setForm] = useState({ name: '', plate: '', modelYear: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' });
   const [bulkText, setBulkText] = useState('');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState(null);
@@ -3606,7 +3954,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
   const [saleDateInput, setSaleDateInput] = useState('');
   const [saleValueInput, setSaleValueInput] = useState('');
   const CATEGORY_PRESETS = ['Economy Cars', 'Luxury Cars', 'Small Cars', 'Office Use Cars'];
-  const emptyForm = { name: '', plate: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' };
+  const emptyForm = { name: '', plate: '', modelYear: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' };
 
   function addVehicle() {
     if (!form.name.trim()) return;
@@ -3618,7 +3966,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
     }
     setForm(emptyForm);
   }
-  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, category: v.category || '', color: v.color || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '', purchaseDate: v.purchaseDate || '', registrationExpiry: v.registrationExpiry || '', ownershipType: v.ownershipType || 'owned', investorCommissionPct: v.investorCommissionPct || '', investorName: v.investorName || '' }); }
+  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, modelYear: v.modelYear || '', category: v.category || '', color: v.color || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '', purchaseDate: v.purchaseDate || '', registrationExpiry: v.registrationExpiry || '', ownershipType: v.ownershipType || 'owned', investorCommissionPct: v.investorCommissionPct || '', investorName: v.investorName || '' }); }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -3659,6 +4007,7 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <div className="field" style={{ flex: '1 1 160px' }}><label>Model / Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Sunny" /></div>
           <div className="field" style={{ flex: '1 1 120px' }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
+          <div className="field" style={{ flex: '1 1 100px' }}><label>Model Year</label><input type="number" value={form.modelYear} onChange={e => setForm({ ...form, modelYear: e.target.value })} placeholder="2023" /></div>
           <div className="field" style={{ flex: '1 1 160px' }}>
             <label>Category</label>
             <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
@@ -3709,13 +4058,13 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
           <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5 }} />
         </div>
         <table>
-          <thead><tr><th>S.No</th><th>Model / Name</th><th>Plate</th><th>Category</th><th>Ownership</th><th>Color</th><th>Status</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
+          <thead><tr><th>S.No</th><th>Model / Name</th><th>Model Year</th><th>Plate</th><th>Category</th><th>Ownership</th><th>Color</th><th>Status</th><th className="num">Purchase Value</th><th className="num">Useful Life</th><th></th></tr></thead>
           <tbody>
             {filtered.map((v, i) => {
               const isSold = !!v.saleDate;
               return (
               <tr key={v.id} style={isSold ? { opacity: 0.7 } : undefined}>
-                <td>{i + 1}</td><td>{v.name}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
+                <td>{i + 1}</td><td>{v.name}</td><td>{v.modelYear || '—'}</td><td>{v.plate}</td><td>{v.category || '—'}</td>
                 <td>{v.ownershipType === 'sublease' ? <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> : v.ownershipType === 'investor' ? <span className="badge" style={{ background: '#FFF6E8', color: 'var(--amber)' }}>Investor</span> : <span className="badge" style={{ background: '#EFF4F1', color: 'var(--green)' }}>Owned</span>}</td>
                 <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 14, height: 14, borderRadius: 4, background: v.color ? carColorHex(v.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{v.color || '—'}</span></td>
                 <td>
@@ -3954,6 +4303,7 @@ function InvestorsFleetPanel({ vehicles, vehicleRevenue, rangeMonths, currency }
       </div>
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Investors Fleet — {rangeMonths.map(monthLabel).join(' – ')}</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
         <table>
           <thead><tr><th>S.No</th><th>Vehicle</th><th>Investor</th><th className="num">Commission %</th><th className="num">Total Revenue</th><th className="num">Company's Commission</th><th className="num">Investor's Payout</th></tr></thead>
           <tbody>
@@ -3963,9 +4313,9 @@ function InvestorsFleetPanel({ vehicles, vehicleRevenue, rangeMonths, currency }
                 <td>{r.v.name} ({r.v.plate})</td>
                 <td>{r.v.investorName || '—'}</td>
                 <td className="num">{r.v.investorCommissionPct || 0}%</td>
-                <td className="num">{fmt(r.revenue, currency)}</td>
-                <td className="num">{fmt(r.commission, currency)}</td>
-                <td className="num">{fmt(r.payout, currency)}</td>
+                <td className="num">{fmtNum(r.revenue)}</td>
+                <td className="num">{fmtNum(r.commission)}</td>
+                <td className="num">{fmtNum(r.payout)}</td>
               </tr>
             ))}
           </tbody>
@@ -4017,6 +4367,7 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
     <div>
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Fleet Data Report / Vehicle Information Summary</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>Premium figures in {currency}</p>
         <table>
           <thead><tr><th>S.No</th><th>Car</th><th>Category</th><th>Color</th><th>Registration Expiry</th><th>Insurance Expiry</th><th className="num">Insurance Premium</th><th className="num">Monthly Premium</th><th>Status</th><th></th></tr></thead>
           <tbody>
@@ -4028,8 +4379,8 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
                 <td>{r.v.color || '—'}</td>
                 <td>{r.v.registrationExpiry || '—'}</td>
                 <td>{r.insExpiry || '—'}</td>
-                <td className="num">{r.premium ? fmt(r.premium, currency) : '—'}</td>
-                <td className="num">{r.monthlyPremium ? fmt(r.monthlyPremium, currency) : '—'}</td>
+                <td className="num">{r.premium ? fmtNum(r.premium) : '—'}</td>
+                <td className="num">{r.monthlyPremium ? fmtNum(r.monthlyPremium) : '—'}</td>
                 <td>
                   <span className="badge" style={{ background: r.status.color + '20', color: r.status.color, fontWeight: r.status.label !== 'Ok' ? 700 : 400, animation: r.status.label === 'Expired' ? 'pulse 1.5s infinite' : 'none' }}>{r.status.label}</span>
                 </td>
@@ -4139,6 +4490,25 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   function deleteAgreement(a) {
     if (!confirmDelete(`permanently deleting agreement ${a.raNumber || a.id}`, deletePin)) return;
     setAgreements(agreements.filter(x => x.id !== a.id));
+  }
+
+  // Inline Edit — corrects a data-entry mistake on an existing agreement directly in the
+  // row (wrong plate/rate/dates/customer typed at entry or import), distinct from Replace
+  // Vehicle, which is for a genuine mid-contract vehicle swap.
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+  function startEdit(a) { setEditingId(a.id); setEditDraft({ ...a }); }
+  function cancelEdit() { setEditingId(null); setEditDraft(null); }
+  function saveEdit() {
+    if (!editDraft.plate || !editDraft.startDate || !editDraft.rate) { window.alert('Vehicle Plate, Start Date, and Rate are all required.'); return; }
+    if (editDraft.status === 'open') {
+      const conflict = agreements.find(a => a.id !== editDraft.id && a.status === 'open' && (a.plate || '').trim().toLowerCase() === editDraft.plate.trim().toLowerCase());
+      if (conflict) { window.alert(`Cannot save: "${editDraft.plate}" already has another open agreement (RA# ${conflict.raNumber || conflict.id}). Resolve that first.`); return; }
+    }
+    const vehicle = findVehicleByPlate(vehicles, editDraft.plate);
+    setAgreements(agreements.map(a => a.id === editDraft.id ? { ...editDraft, vehicleId: vehicle ? vehicle.id : '' } : a));
+    setEditingId(null);
+    setEditDraft(null);
   }
 
   // Vehicle Replacement: closes the current agreement leg as of the swap date, and opens a
@@ -4363,7 +4733,42 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <table>
             <thead><tr><th>S.No</th><th>RA#</th><th>Customer</th><th>Plate</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th><th></th></tr></thead>
             <tbody>
-              {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map((a, i) => (
+              {filtered.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || '')).map((a, i) => {
+                if (editingId === a.id) {
+                  return (
+                    <tr key={a.id} style={{ background: '#FFF9EC' }}>
+                      <td>{i + 1}</td>
+                      <td><input value={editDraft.raNumber} onChange={e => setEditDraft({ ...editDraft, raNumber: e.target.value })} style={{ width: 80 }} /></td>
+                      <td><input value={editDraft.customerName} onChange={e => setEditDraft({ ...editDraft, customerName: e.target.value })} style={{ width: 120 }} /></td>
+                      <td>
+                        <input value={editDraft.plate} onChange={e => setEditDraft({ ...editDraft, plate: e.target.value })} list="fleet-plates-edit" style={{ width: 90 }} />
+                        <datalist id="fleet-plates-edit">{vehicles.map(v => <option key={v.id} value={v.plate} />)}</datalist>
+                      </td>
+                      <td>
+                        <select value={editDraft.type} onChange={e => setEditDraft({ ...editDraft, type: e.target.value })}>
+                          <option value="daily">Daily</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                      </td>
+                      <td><input type="date" value={editDraft.startDate} onChange={e => setEditDraft({ ...editDraft, startDate: e.target.value })} style={{ width: 130 }} /></td>
+                      <td><input type="date" value={editDraft.closeDate} onChange={e => setEditDraft({ ...editDraft, closeDate: e.target.value })} style={{ width: 130 }} disabled={editDraft.status === 'open'} /></td>
+                      <td>
+                        <select value={editDraft.status} onChange={e => setEditDraft({ ...editDraft, status: e.target.value })}>
+                          <option value="open">open</option>
+                          <option value="closed">closed</option>
+                          <option value="void">void</option>
+                        </select>
+                      </td>
+                      <td className="num"><input type="number" value={editDraft.rate} onChange={e => setEditDraft({ ...editDraft, rate: e.target.value })} style={{ width: 70 }} title="Rate" /></td>
+                      <td className="num">—</td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn small primary" onClick={saveEdit}>Save</button>{' '}
+                        <button className="btn small" onClick={cancelEdit}>Cancel</button>
+                      </td>
+                    </tr>
+                  );
+                }
+                return (
                 <tr key={a.id}>
                   <td>{i + 1}</td>
                   <td>{a.raNumber || '—'}{a.parentRaNumber && <span style={{ fontSize: 10.5, color: 'var(--steel)', marginLeft: 4 }} title={`Replacement leg of ${a.parentRaNumber}`}>↳ linked</span>}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td><td>{a.type === 'monthly' ? 'Monthly' : 'Daily'}</td>
@@ -4372,11 +4777,13 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   <td className="num">{agreementTotalDays(a)}</td>
                   <td className="num">{fmt(agreementTotalRevenue(a), currency)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="icon-btn" title="Edit" onClick={() => startEdit(a)}>✎</button>{' '}
                     {a.status === 'closed' && <button className="icon-btn" title="Reopen" onClick={() => reopenAgreement(a)}>↺</button>}{' '}
                     <button className="icon-btn" onClick={() => deleteAgreement(a)}>✕</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {filtered.length === 0 && <tr><td colSpan={11} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
             </tbody>
           </table>
@@ -4386,10 +4793,12 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   );
 }
 
-function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }) {
+function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency, deletePin }) {
   const emptyForm = { vehicleId: '', vehicleValue: '', premiumAmount: '', startDate: '', endDate: '' };
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState(null);
+  const [view, setView] = useState('list'); // 'list' | 'import'
+  const [bulkText, setBulkText] = useState('');
 
   function vehicleName(id) { const v = vehicles.find(x => x.id === id); return v ? `${v.name} (${v.plate})` : '(unknown vehicle)'; }
   function monthsCovered(p) { return p.startDate && p.endDate ? periodsBetween(p.startDate.slice(0, 7), p.endDate.slice(0, 7)).length : 0; }
@@ -4407,10 +4816,75 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
   function editPolicy(p) { setEditId(p.id); setForm({ vehicleId: p.vehicleId, vehicleValue: p.vehicleValue || '', premiumAmount: p.premiumAmount, startDate: p.startDate, endDate: p.endDate }); }
   function deletePolicy(p) { if (!confirmDelete(`this insurance policy for ${vehicleName(p.vehicleId)}`, deletePin)) return; setPolicies(policies.filter(x => x.id !== p.id)); }
 
+  // Parses "22,000.00" / "2,620.00" style numbers with thousands separators.
+  function parseMoney(str) { return String(str || '').replace(/,/g, '').trim(); }
+
+  function parseBulk() {
+    const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
+    let updatedVehicles = 0, addedPolicies = 0, updatedPolicies = 0;
+    const notFound = [];
+    let nextVehicles = [...vehicles];
+    let nextPolicies = [...policies];
+    lines.forEach(line => {
+      const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
+      // Matches: S.No, Vehicle, Model (year), Plate #, Registration Expiry, Insurance
+      // Start, Insurance Expiry, Insured Value, Premium.
+      const [, , modelYear, plate, regExpiry, insStart, insExpiry, insuredValue, premium] = cols;
+      if (!plate) return;
+      const vIdx = nextVehicles.findIndex(v => (v.plate || '').trim().toLowerCase() === plate.trim().toLowerCase());
+      if (vIdx < 0) { notFound.push(plate); return; }
+      // Plate is the core tracking key — vehicle Model Year and Registration Expiry get
+      // refreshed from this sheet since it's treated as the authoritative source.
+      nextVehicles[vIdx] = { ...nextVehicles[vIdx], modelYear: modelYear || nextVehicles[vIdx].modelYear, registrationExpiry: parseFlexibleDate(regExpiry) || nextVehicles[vIdx].registrationExpiry };
+      updatedVehicles++;
+      const vehicleId = nextVehicles[vIdx].id;
+      const newStart = parseFlexibleDate(insStart);
+      const newEnd = parseFlexibleDate(insExpiry);
+      const newValue = parseMoney(insuredValue);
+      const newPremium = parseMoney(premium);
+      // Dedup by vehicle + start date — re-pasting the same policy updates it in place.
+      const existingIdx = nextPolicies.findIndex(p => p.vehicleId === vehicleId && p.startDate === newStart);
+      if (existingIdx >= 0) {
+        nextPolicies[existingIdx] = { ...nextPolicies[existingIdx], vehicleValue: newValue, premiumAmount: newPremium, startDate: newStart, endDate: newEnd };
+        updatedPolicies++;
+      } else {
+        nextPolicies.push({ id: uid('ins'), vehicleId, vehicleValue: newValue, premiumAmount: newPremium, startDate: newStart, endDate: newEnd });
+        addedPolicies++;
+      }
+    });
+    setVehicles(nextVehicles);
+    setPolicies(nextPolicies);
+    setBulkText('');
+    setView('list');
+    window.alert(`Import complete: ${updatedVehicles} vehicles refreshed (Model Year / Registration Expiry), ${addedPolicies} policies added, ${updatedPolicies} policies updated.${notFound.length ? `\n\nPlates not found in your fleet, skipped: ${notFound.join(', ')}` : ''}`);
+  }
+
   const sorted = policies.slice().sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
 
   return (
     <div>
+      <div className="panel">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${view === 'list' ? 'selected' : ''}`} onClick={() => setView('list')}>Add / Edit</div>
+          <div className={`chip ${view === 'import' ? 'selected' : ''}`} onClick={() => setView('import')}>Import / Paste</div>
+        </div>
+      </div>
+
+      {view === 'import' && (
+        <div className="panel">
+          <h3>Import / Paste Insurance &amp; Registration Update</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
+            Paste rows straight from your renewal sheet: <code>S.No, Vehicle, Model (year), Plate #, Registration Expiry, Insurance Start, Insurance Expiry, Insured Value, Premium</code>.
+            Matched by <b>Plate #</b> — the core tracking key. Updates that vehicle's Model Year and Registration Expiry, and adds/updates its Insurance Policy in one go. Plates not found in your fleet are skipped and listed after import, not silently created.
+          </p>
+          <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6}
+            style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
+            placeholder={"1, NISSAN SUNNY, 2021, H-31806, 09/09/2026, 10/09/2025, 09/10/2026, 22000.00, 2620.00"} />
+          <button className="btn primary" style={{ marginTop: 8 }} onClick={parseBulk}>Import</button>
+        </div>
+      )}
+
+      {view === 'list' && (
       <div className="panel">
         <h3>{editId ? 'Edit Policy' : 'Add Insurance Policy'}</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Multiple policies per vehicle over time are fine — renewals become new entries, old ones stay as history. Vehicle Value is the insured value for that policy year (it typically changes at each renewal as the car ages) — record it here so premium changes year to year make sense. The premium is split evenly across the months it covers, and feeds P&L Entry's Insurance Charges automatically.</p>
@@ -4432,8 +4906,10 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
           {editId && <button className="btn" onClick={() => { setEditId(null); setForm(emptyForm); }}>Cancel</button>}
         </div>
       </div>
+      )}
       <div className="panel">
         <h3>All Policies ({policies.length})</h3>
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
         <table>
           <thead><tr><th>S.No</th><th>Vehicle</th><th className="num">Vehicle Value</th><th className="num">Premium</th><th>Start</th><th>End</th><th className="num">Months Covered</th><th className="num">Monthly Cost</th><th></th></tr></thead>
           <tbody>
@@ -4441,12 +4917,12 @@ function InsurancePanel({ policies, setPolicies, vehicles, currency, deletePin }
               <tr key={p.id}>
                 <td>{i + 1}</td>
                 <td>{vehicleName(p.vehicleId)}</td>
-                <td className="num">{p.vehicleValue ? fmt(p.vehicleValue, currency) : <span style={{ color: 'var(--amber)' }}>Not set</span>}</td>
-                <td className="num">{fmt(p.premiumAmount, currency)}</td>
+                <td className="num">{p.vehicleValue ? fmtNum(p.vehicleValue) : <span style={{ color: 'var(--amber)' }}>Not set</span>}</td>
+                <td className="num">{fmtNum(p.premiumAmount)}</td>
                 <td>{p.startDate}</td>
                 <td>{p.endDate}</td>
                 <td className="num">{monthsCovered(p)}</td>
-                <td className="num">{fmt(num(p.premiumAmount) / (monthsCovered(p) || 1), currency)}</td>
+                <td className="num">{fmtNum(num(p.premiumAmount) / (monthsCovered(p) || 1))}</td>
                 <td style={{ textAlign: 'right' }}>
                   <button className="icon-btn" onClick={() => editPolicy(p)}>✎</button>{' '}
                   <button className="icon-btn" onClick={() => deletePolicy(p)}>✕</button>
@@ -5108,7 +5584,7 @@ function QuickReviewPanel({ companyName, logoDataUrl, currency, rangeMonths, lin
 
 /* ---------------- Full printable report ---------------- */
 
-function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays }) {
+function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, occupancy, baseDays, monthlyRemarks, occupancyRemarks, vehicleRevenueRemarks }) {
   const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
   const yearData = rangeMonths.map(p => { const c = computeMonth(p, monthlyData, lineItems); return { label: monthLabel(p), ...c }; });
   const occRows = vehicles.map(v => {
@@ -5133,13 +5609,25 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
       </div>
 
       <div className="panel">
-        <h3>Income &amp; Net Profit Trend</h3>
-        <LineTrendSVG data={yearData} series={[
-          { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
-          { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
-          { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
-          { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
-        ]} />
+        <h3>Income &amp; Net Profit Trend{rangeMonths.length === 1 ? ` — ${monthLabel(rangeMonths[0])}` : ''}</h3>
+        {rangeMonths.length > 1 ? (
+          <>
+            <LineTrendSVG data={yearData} series={[
+              { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+              { key: 'income_budget', label: 'Budget Income', color: '#3E9C6E', dashed: true },
+              { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+              { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#2D6E8E', dashed: true },
+            ]} />
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>■ Green = Income · ■ Blue = Net Profit · dashed = Budget</div>
+          </>
+        ) : (
+          <GroupedBarChart data={[{ label: monthLabel(rangeMonths[0]), ...yearData[0] }]} series={[
+            { key: 'income_budget', label: 'Budget Income', color: '#B9DCC7' },
+            { key: 'income_actual', label: 'Actual Income', color: '#3E9C6E' },
+            { key: 'netprofit_budget', label: 'Budget Net Profit', color: '#C9D6DC' },
+            { key: 'netprofit_actual', label: 'Actual Net Profit', color: '#2D6E8E' },
+          ]} />
+        )}
       </div>
 
       <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
@@ -5159,6 +5647,7 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
           </tbody>
         </table>
       </div>
+      <NotesSection rangeMonths={rangeMonths} sources={[{ remarks: monthlyRemarks, label: 'P&L Remarks' }, { remarks: occupancyRemarks, label: 'Occupancy Remarks' }, { remarks: vehicleRevenueRemarks, label: 'Vehicle Revenue Remarks' }]} />
     </div>
   );
 }
