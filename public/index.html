@@ -266,14 +266,40 @@ function policyDaysInMonth(policy, period) {
   return Math.round((rangeEnd - rangeStart) / 86400000) + 1;
 }
 
+// A full calendar month within the policy term always gets the same flat monthly rate
+// (premium ÷ correct elapsed months) — matching standard amortization practice, and your
+// expectation that every month should show the same figure. Only the genuine partial
+// months at the very start and end of the term (which really do cover fewer days than a
+// full month) differ, and whatever's left after paying every full month at the flat rate
+// is split between those partial months by their actual day-share — so the total across
+// the whole schedule always reconciles exactly to the premium, to the cent.
+function singlePolicyMonthShare(policy, period) {
+  const daysThisMonth = policyDaysInMonth(policy, period);
+  if (daysThisMonth <= 0) return 0;
+  const totalMonths = monthsBetweenDates(policy.startDate, policy.endDate);
+  const flatRate = num(policy.premiumAmount) / totalMonths;
+  const touchedMonths = periodsBetween(policy.startDate.slice(0, 7), policy.endDate.slice(0, 7));
+  const start = new Date(policy.startDate), end = new Date(policy.endDate);
+  const classified = touchedMonths.map(per => {
+    const [y, m] = per.split('-').map(Number);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
+    return { per, isFull: start <= monthStart && end >= monthEnd, days: policyDaysInMonth(policy, per) };
+  });
+  const current = classified.find(c => c.per === period);
+  if (!current) return 0;
+  if (current.isFull) return flatRate;
+  const fullCount = classified.filter(c => c.isFull).length;
+  const remainderForPartials = num(policy.premiumAmount) - fullCount * flatRate;
+  const totalPartialDays = classified.filter(c => !c.isFull).reduce((s, c) => s + c.days, 0);
+  return totalPartialDays > 0 ? remainderForPartials * (current.days / totalPartialDays) : 0;
+}
+
 function insuranceMonthlyTotal(period, insurancePolicies) {
   let total = 0;
   (insurancePolicies || []).forEach(p => {
     if (!p.startDate || !p.endDate) return;
-    const totalDays = Math.round((new Date(p.endDate) - new Date(p.startDate)) / 86400000) + 1;
-    const daysThisMonth = policyDaysInMonth(p, period);
-    if (daysThisMonth <= 0) return;
-    total += num(p.premiumAmount) * (daysThisMonth / (totalDays || 1));
+    total += singlePolicyMonthShare(p, period);
   });
   return total;
 }
