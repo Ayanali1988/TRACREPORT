@@ -1019,7 +1019,7 @@ function App() {
 
   const [companyName, setCompanyName] = useState('My Rent A Car LLC');
   const [logoDataUrl, setLogoDataUrl] = useState('');
-  const [year, setYear] = useState('2026');
+  const [year, setYear] = useState(String(new Date().getFullYear()));
   const [currency, setCurrency] = useState('AED');
   const [baseDays, setBaseDays] = useState(22);
   const [deletePin, setDeletePin] = useState('');
@@ -1670,6 +1670,24 @@ function App() {
             <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Fleet Financial Report — {year}</div>
           </div>
           <div className="filters">
+            <div className="field no-print">
+              <label>&nbsp;</label>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn small" title="Shift the whole report range back one year" onClick={() => {
+                  const [fy, fm] = reportFrom.split('-').map(Number);
+                  const [ty, tm] = reportTo.split('-').map(Number);
+                  setReportFrom((fy - 1) + '-' + String(fm).padStart(2, '0'));
+                  setReportTo((ty - 1) + '-' + String(tm).padStart(2, '0'));
+                }}>◀ Year</button>
+                <button className="btn small" title="Jump the report range to the current year" onClick={() => { const y = new Date().getFullYear(); setReportFrom(y + '-01'); setReportTo(y + '-12'); }}>Today</button>
+                <button className="btn small" title="Shift the whole report range forward one year" onClick={() => {
+                  const [fy, fm] = reportFrom.split('-').map(Number);
+                  const [ty, tm] = reportTo.split('-').map(Number);
+                  setReportFrom((fy + 1) + '-' + String(fm).padStart(2, '0'));
+                  setReportTo((ty + 1) + '-' + String(tm).padStart(2, '0'));
+                }}>Year ▶</button>
+              </div>
+            </div>
             <div className="field"><label>Report From</label><input type="month" value={reportFrom} onChange={e => setReportFrom(e.target.value)} /></div>
             <div className="field"><label>Report To</label><input type="month" value={reportTo} onChange={e => setReportTo(e.target.value)} /></div>
           </div>
@@ -1969,14 +1987,20 @@ function MonthNavigator({ period, setPeriod }) {
     const d = new Date(y, m - 1 + delta, 1);
     setPeriod(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
   }
+  function shiftYear(delta) {
+    const [y, m] = period.split('-').map(Number);
+    setPeriod((y + delta) + '-' + String(m).padStart(2, '0'));
+  }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '6px 0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '6px 0', flexWrap: 'wrap' }}>
+      <button className="btn small" onClick={() => shiftYear(-1)} title="Same month, previous year">◀◀ Year</button>
       <button className="btn" onClick={() => shift(-1)} title="Previous month">◀ Back</button>
       <div style={{ textAlign: 'center', minWidth: 160 }}>
         <div style={{ fontSize: 21, fontWeight: 700, color: 'var(--navy)', letterSpacing: '0.01em' }}>{monthLabel(period)}</div>
         <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ marginTop: 4 }} />
       </div>
       <button className="btn" onClick={() => shift(1)} title="Next month">Next ▶</button>
+      <button className="btn small" onClick={() => shiftYear(1)} title="Same month, next year">Year ▶▶</button>
     </div>
   );
 }
@@ -2092,8 +2116,8 @@ function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency,
           Prepare next year's budget ahead of time by cloning a source year's figures forward, with a custom % adjustment per section. Nothing is written until you click Apply.
         </p>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="field"><label>Source Year</label><input type="number" value={sourceYear} onChange={e => { setSourceYear(Number(e.target.value)); setApplied(false); }} style={{ width: 90 }} /></div>
-          <div className="field"><label>Target Year</label><input type="number" value={targetYear} onChange={e => { setTargetYear(Number(e.target.value)); setApplied(false); }} style={{ width: 90 }} /></div>
+          <div className="field"><label>Source Year</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => { setSourceYear(sourceYear - 1); setApplied(false); }}>−</button><input type="number" value={sourceYear} onChange={e => { setSourceYear(Number(e.target.value)); setApplied(false); }} style={{ width: 70 }} /><button className="btn small" onClick={() => { setSourceYear(sourceYear + 1); setApplied(false); }}>+</button></div></div>
+          <div className="field"><label>Target Year</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => { setTargetYear(targetYear - 1); setApplied(false); }}>−</button><input type="number" value={targetYear} onChange={e => { setTargetYear(Number(e.target.value)); setApplied(false); }} style={{ width: 70 }} /><button className="btn small" onClick={() => { setTargetYear(targetYear + 1); setApplied(false); }}>+</button></div></div>
           <div className="field">
             <label>Base On</label>
             <select value={basis} onChange={e => { setBasis(e.target.value); setApplied(false); }}>
@@ -2659,8 +2683,8 @@ function YoyComparePanel({ lineItems, monthlyData, currency, vehicles, occupancy
         <h3>Year-over-Year Comparison</h3>
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Compares two full years side by side, month by month, using whichever periods you've already entered data for — no separate setup needed.</p>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="field"><label>Year A (baseline)</label><input type="number" value={yearA} onChange={e => setYearA(Number(e.target.value))} style={{ width: 90 }} /></div>
-          <div className="field"><label>Year B (comparison)</label><input type="number" value={yearB} onChange={e => setYearB(Number(e.target.value))} style={{ width: 90 }} /></div>
+          <div className="field"><label>Year A (baseline)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearA(yearA - 1)}>−</button><input type="number" value={yearA} onChange={e => setYearA(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearA(yearA + 1)}>+</button></div></div>
+          <div className="field"><label>Year B (comparison)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearB(yearB - 1)}>−</button><input type="number" value={yearB} onChange={e => setYearB(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearB(yearB + 1)}>+</button></div></div>
           <div className="field">
             <label>Basis</label>
             <select value={basis} onChange={e => setBasis(e.target.value)}>
