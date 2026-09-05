@@ -175,7 +175,7 @@ const ADMIN_ONLY_TABS = ['settings'];
 const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance', 'budget-planning'];
 const VIEWER_HIDDEN_TABS = [...ADMIN_ONLY_TABS, ...ADMIN_MANAGER_TABS, 'financing', 'feasibility'];
 function TAB_GROUPS_FOR_ROLE(role) {
-  const all = ['dashboard', 'quick-review', 'pnl-compare', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
+  const all = ['dashboard', 'quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
   if (role === 'admin') return all;
   if (role === 'manager') return all.filter(t => !ADMIN_ONLY_TABS.includes(t) && t !== 'financing' && t !== 'feasibility' && t !== 'personal-finance');
   return all.filter(t => !VIEWER_HIDDEN_TABS.includes(t) && t !== 'personal-finance');
@@ -225,10 +225,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-107';
+const APP_VERSION = 'Version 2026-118';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = 'Agreements: Open Agreements now has Edit and Delete buttons too, not just Close/Replace/Void — previously you had to switch to All Agreements to edit or delete a still-open contract.';
+const APP_WHATS_NEW = "P&L Statement sign-off box refined: now reads 'Manager Accounts' / company name / Date, with a thin grey border around the whole box and no divider line in the middle — the Date field gets its own short solid underline instead.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -312,6 +312,45 @@ function insuranceMonthlyTotal(period, insurancePolicies) {
 }
 
 // ---------------- Agreement-based Occupancy/Income system ----------------
+
+/* ---------------- Garage Movement ---------------- */
+function emptyGarageMovement() {
+  return {
+    id: uid('grg'), movementNumber: '', vehicleId: '', garageName: '',
+    purpose: '', estimatedCost: '', remarks: '',
+    movementInDate: todayStr(), movementOutDate: '',
+  };
+}
+// e.g. GRG-AlFalah-SEP2026 — garage name (spaces stripped) + month/year of the In date.
+function generateMovementNumber(garageName, movementInDate) {
+  const d = movementInDate ? new Date(movementInDate) : new Date();
+  const mon = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+  const yr = d.getFullYear();
+  const clean = (garageName || 'Garage').trim().replace(/\s+/g, '');
+  return `GRG-${clean}-${mon}${yr}`;
+}
+
+// The single source of truth for a vehicle's current status, used by the Dashboard split,
+// Fleet Data Report, and idle-days calculation alike, so all three always agree.
+// Priority: In Garage (physical fact) > Rented (open Agreement) > Available.
+function vehicleFleetStatus(vehicle, agreements, garageMovements) {
+  const openMovement = (garageMovements || []).find(m => m.vehicleId === vehicle.id && m.movementInDate && !m.movementOutDate);
+  if (openMovement) return { status: 'garage', movement: openMovement };
+  const openAgreement = (agreements || []).find(a => a.status === 'open' && ((a.vehicleId && a.vehicleId === vehicle.id) || (a.plate || '').trim().toLowerCase() === (vehicle.plate || '').trim().toLowerCase()));
+  if (openAgreement) return { status: 'rented', agreement: openAgreement };
+  return { status: 'available' };
+}
+
+// For an Available vehicle: days since its most recently CLOSED agreement ended. Returns
+// null if the vehicle has never had a closed agreement (nothing to measure idle time from).
+function idleDaysSince(vehicle, agreements) {
+  const closed = (agreements || [])
+    .filter(a => a.status === 'closed' && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || (a.plate || '').trim().toLowerCase() === (vehicle.plate || '').trim().toLowerCase()))
+    .sort((a, b) => (a.closeDate < b.closeDate ? 1 : -1));
+  if (!closed.length) return null;
+  const days = Math.round((new Date(todayStr()) - new Date(closed[0].closeDate)) / 86400000);
+  return { days, lastCloseDate: closed[0].closeDate };
+}
 
 function findVehicleByPlate(vehicles, plate) {
   const norm = (plate || '').trim().toLowerCase();
@@ -490,6 +529,11 @@ function itemFieldValue(item, monthlyData, period, field) {
   }
   return num((md[item.key] || {})[field]);
 }
+// Sums itemFieldValue across a range of months — used by the one-page P&L Statement so each
+// line item (and its sub-accounts) shows a period total rather than a single month's figure.
+function rangeItemTotal(item, monthlyData, monthKeys, field) {
+  return monthKeys.reduce((s, p) => s + itemFieldValue(item, monthlyData, p, field), 0);
+}
 
 function computeMonth(period, monthlyData, lineItems) {
   const sumSec = (arr, field) => arr.reduce((s, item) => s + itemFieldValue(item, monthlyData, period, field), 0);
@@ -532,6 +576,10 @@ function rowVariance(budget, actual, kind) {
   return { variance, pct, favorable: variance >= 0 };
 }
 
+// Same Red (loss) / Blue (surplus) convention already used for the headline Net Profit figure
+// on the Dashboard — reused here so Net Profit rows read the same way in Budget vs Actual tables.
+function netAmountColor(value) { return value >= 0 ? '#1E5AA8' : '#C1503F'; }
+
 /* ---------------- Excel row builders (shared by contextual + cumulative export) ---------------- */
 
 // Sets sensible column widths and freezes the header row + label column, so a sheet opens
@@ -539,6 +587,43 @@ function rowVariance(budget, actual, kind) {
 function applySheetFormatting(ws, labelColWidth, dataColWidth, numCols) {
   ws['!cols'] = [{ wch: labelColWidth }, ...Array(Math.max(0, numCols - 1)).fill({ wch: dataColWidth })];
   ws['!freeze'] = { xSplit: 1, ySplit: 1 };
+}
+
+// Builds the P&L Statement's rows for Excel export, in the exact same Chart-of-Accounts
+// order (with sub-accounts indented) as the on-screen report.
+function buildPnlStatementRows(rangeMonths, lineItems, monthlyData) {
+  const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
+  const totalExpBudget = totals.direct_budget + totals.indirect_budget;
+  const totalExpActual = totals.direct_actual + totals.indirect_actual;
+  const rows = [['Account', 'Budget', 'Actual', 'Variance']];
+
+  function itemRow(item, indent) {
+    const b = rangeItemTotal(item, monthlyData, rangeMonths, 'budget');
+    const a = rangeItemTotal(item, monthlyData, rangeMonths, 'actual');
+    rows.push([('  '.repeat(indent)) + item.label, Math.round(b), Math.round(a), Math.round(a - b)]);
+  }
+  function section(sectionKey, title) {
+    rows.push([title, '', '', '']);
+    lineItems[sectionKey].forEach(item => {
+      itemRow(item, 1);
+      (item.subAccounts || []).forEach(sub => itemRow(sub, 2));
+    });
+    const sb = totals[sectionKey === 'revenue' ? 'income_budget' : sectionKey + '_budget'];
+    const sa = totals[sectionKey === 'revenue' ? 'income_actual' : sectionKey + '_actual'];
+    rows.push(['Total ' + title, Math.round(sb), Math.round(sa), Math.round(sa - sb)]);
+    rows.push([]);
+  }
+
+  section('revenue', 'Income');
+  section('direct', 'Direct Expenses');
+  section('indirect', 'Indirect Expenses');
+  rows.push(['Total Expenses (Direct + Indirect)', Math.round(totalExpBudget), Math.round(totalExpActual), Math.round(totalExpActual - totalExpBudget)]);
+  rows.push(['Gross Profit', Math.round(totals.ebitda_budget), Math.round(totals.ebitda_actual), Math.round(totals.ebitda_actual - totals.ebitda_budget)]);
+  rows.push([]);
+  section('interest', 'Interest & Bank Charges');
+  section('belowLine', 'Other Income');
+  rows.push(['Net Profit / Loss', Math.round(totals.netprofit_budget), Math.round(totals.netprofit_actual), Math.round(totals.netprofit_actual - totals.netprofit_budget)]);
+  return rows;
 }
 
 function buildPnlDetailRows(rangeMonths, lineItems, monthlyData) {
@@ -759,25 +844,29 @@ function parseFlexibleDate(str) {
 function emptyLoan() {
   return {
     id: uid('loan'),
-    vehicleId: '', modelName: '', lender: '',
+    vehicleId: '', modelName: '', lender: '', loanType: '',
     carValue: '', downPayment: '', processingFee: '', includeFeeInLoan: false,
-    interestRate: '', termUnit: 'months', termValue: 36,
+    interestRate: '', interestRateBasis: 'year', termUnit: 'months', termValue: 36,
     startDate: new Date().toISOString().slice(0, 10),
     schedule: [], deferments: [],
   };
 }
+const PERSONAL_LOAN_TYPES = ['Loan on Card (LOC)', 'Cash Loan', 'Balance Transfer Loan'];
 
 function loanAmount(loan) {
   return Math.max(0, num(loan.carValue) - num(loan.downPayment) + (loan.includeFeeInLoan ? num(loan.processingFee) : 0));
 }
 function loanTermMonths(loan) { return loan.termUnit === 'years' ? num(loan.termValue) * 12 : num(loan.termValue); }
+// Personal loans are often quoted as a flat monthly rate by the bank; converting to annual here
+// keeps generateSchedule/calcEMI's math identical regardless of which basis was entered.
+function loanAnnualRate(loan) { return loan.interestRateBasis === 'month' ? num(loan.interestRate) * 12 : num(loan.interestRate); }
 
 function generateSchedule(loan) {
   const principal = loanAmount(loan);
   const months = loanTermMonths(loan);
   if (!months) return [];
   const years = months / 12;
-  const rate = num(loan.interestRate);
+  const rate = loanAnnualRate(loan);
   const totalInterest = principal * (rate / 100) * years;
   const monthlyPrincipal = principal / months;
   const monthlyInterest = totalInterest / months;
@@ -821,6 +910,8 @@ function loanStats(loan) {
   const payoffDate = schedule.length ? schedule[schedule.length - 1].dueDate : null;
   const today = new Date().toISOString().slice(0, 10);
   const overdue = !!(nextDue && nextDue.dueDate < today);
+  const daysUntilDue = nextDue ? Math.round((new Date(nextDue.dueDate) - new Date(today)) / 86400000) : null;
+  const dueSoon = !!(nextDue && !overdue && daysUntilDue !== null && daysUntilDue <= 3);
   const monthlyEMI = schedule.length ? (num(schedule[0].principal) + num(schedule[0].interest)) : 0;
   const totalAmount = totalPrincipal + totalInterest;
   const paidAmount = paidPrincipal + paidInterest;
@@ -830,7 +921,7 @@ function loanStats(loan) {
   const interestPaidPct = totalInterest ? paidInterest / totalInterest : 0;
   const installmentsPaid = paidRows.length;
   const installmentsTotal = schedule.length;
-  return { totalPrincipal, totalInterest, paidPrincipal, paidInterest, balancePrincipal, balanceInterest, nextDue, payoffDate, overdue, monthlyEMI, totalAmount, paidAmount, balanceAmount, paidPct, principalPaidPct, interestPaidPct, installmentsPaid, installmentsTotal };
+  return { totalPrincipal, totalInterest, paidPrincipal, paidInterest, balancePrincipal, balanceInterest, nextDue, payoffDate, overdue, dueSoon, monthlyEMI, totalAmount, paidAmount, balanceAmount, paidPct, principalPaidPct, interestPaidPct, installmentsPaid, installmentsTotal };
 }
 
 function emptyFeasibilityStudy() {
@@ -1058,6 +1149,8 @@ function App() {
   const [printLoanId, setPrintLoanId] = useState(null);
   const [printFeasibilityId, setPrintFeasibilityId] = useState(null);
   const [printMode, setPrintMode] = useState('cumulative');
+  const [pnlStatementViewMode, setPnlStatementViewMode] = useState('both'); // 'both' | 'budget' | 'actual'
+  const [pnlStatementOrientation, setPnlStatementOrientation] = useState('portrait'); // 'portrait' | 'landscape'
   const [printMargin, setPrintMargin] = useState('10mm');
   const [printOrientation, setPrintOrientation] = useState('landscape');
 
@@ -1132,8 +1225,9 @@ function App() {
   const [personalLoans, setPersonalLoans] = useState([]);
   const [personalCards, setPersonalCards] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [dashboardWidgets, setDashboardWidgets] = useState({ netProfit: true, totalRevenue: true, occupancy: true, topModels: true, budgetVsActual: true, alerts: true });
+  const [dashboardWidgets, setDashboardWidgets] = useState({ netProfit: true, totalRevenue: true, occupancy: true, fleetStatus: true, topModels: true, budgetVsActual: true, alerts: true });
   const [agreements, setAgreements] = useState([]);
+  const [garageMovements, setGarageMovements] = useState([]);
   const [agreementPeriod, setAgreementPeriod] = useState(year + '-01');
   const [lastAgreementReview, setLastAgreementReview] = useState('');
   const [lastDailyAgreementCheck, setLastDailyAgreementCheck] = useState('');
@@ -1173,7 +1267,7 @@ function App() {
   }
 
   function currentFullState() {
-    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck };
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements };
   }
 
   async function performSave(pwOverride) {
@@ -1243,6 +1337,7 @@ function App() {
         if (data.personalCards) setPersonalCards(data.personalCards);
         if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
         if (data.agreements) setAgreements(data.agreements);
+        if (data.garageMovements) setGarageMovements(data.garageMovements);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1292,7 +1387,7 @@ function App() {
     if (!loaded || !authed) return;
     const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, loaded, authed]);
 
   // Keep every month's insurance Actual figure in sync with the auto-calculated policy
   // total (skipping any month the user has explicitly overridden) — runs across all
@@ -1363,6 +1458,9 @@ function App() {
 
   const monthKeys = useMemo(() => monthsOf(year), [year]);
   const overdueLoans = useMemo(() => loans.map(l => ({ loan: l, stats: loanStats(l) })).filter(x => x.stats.overdue), [loans]);
+  // Personal Loans only (not Vehicle Financing) get an earlier heads-up — starting 3 days before
+  // the due date, not just after it's overdue — and it keeps showing until marked paid.
+  const personalLoanReminders = useMemo(() => personalLoans.map(l => ({ loan: l, stats: loanStats(l) })).filter(x => x.stats.overdue || x.stats.dueSoon), [personalLoans]);
   const expiryAlerts = useMemo(() => vehicleExpiryAlerts(vehicles, insurancePolicies, todayStr()), [vehicles, insurancePolicies]);
   const criticalExpiryAlerts = expiryAlerts.filter(a => a.severity === 'critical');
   const warningExpiryAlerts = expiryAlerts.filter(a => a.severity === 'warning');
@@ -1471,6 +1569,7 @@ function App() {
         if (data.personalCards) setPersonalCards(data.personalCards);
         if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
         if (data.agreements) setAgreements(data.agreements);
+        if (data.garageMovements) setGarageMovements(data.garageMovements);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1493,15 +1592,20 @@ function App() {
 
   function handlePrint() {
     setPrintLoanId(null);
+    const prevOrientation = printOrientation;
     if (activeTab === 'quick-review') setPrintMode('quick-review');
     else if (activeTab === 'pnl-compare') setPrintMode('pnl');
+    else if (activeTab === 'pnl-statement') { setPrintMode('pnlstatement'); setPrintOrientation(pnlStatementOrientation); }
     else if (activeTab === 'occ-report') setPrintMode('occupancy');
     else if (activeTab === 'model-compare') setPrintMode('model');
     else if (activeTab === 'feasibility') setPrintMode('feasibility');
     else if (activeTab === 'financing') setPrintMode('financing');
     else if (activeTab === 'agreements') setPrintMode('agreements');
     else { handlePrintCumulative(); return; }
-    setTimeout(() => window.print(), 200);
+    setTimeout(() => {
+      window.print();
+      if (activeTab === 'pnl-statement') setPrintOrientation(prevOrientation);
+    }, 200);
   }
 
   function handlePrintLoan(loanId) {
@@ -1533,6 +1637,7 @@ function App() {
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
     (() => { const ws = XLSX.utils.aoa_to_sheet(buildPnlDetailRows(rangeMonths, lineItems, monthlyData)); applySheetFormatting(ws, 34, 13, 1 + rangeMonths.length * 3); XLSX.utils.book_append_sheet(wb, ws, 'PnL Detail'); })();
+    (() => { const ws = XLSX.utils.aoa_to_sheet(buildPnlStatementRows(rangeMonths, lineItems, monthlyData)); applySheetFormatting(ws, 34, 13, 4); XLSX.utils.book_append_sheet(wb, ws, 'P&L Statement'); })();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Matrix');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Distribution');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildRoiRows(vehicles, rangeMonths, vehicleRevenue, defaultUsefulLife)), 'Vehicle ROI');
@@ -1587,6 +1692,14 @@ function App() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Matrix');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Distribution');
       XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-occupancy-report-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'pnl-statement') {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(buildPnlStatementRows(rangeMonths, lineItems, monthlyData));
+      applySheetFormatting(ws, 34, 13, 4);
+      XLSX.utils.book_append_sheet(wb, ws, 'P&L Statement');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-pnl-statement-${reportFrom}_to_${reportTo}.xlsx`);
       return;
     }
     if (activeTab === 'model-compare') {
@@ -1681,11 +1794,13 @@ function App() {
                 <div className="nav-group-label">Reports</div>
                 <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
                 <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
+                {allowed.includes('pnl-statement') && <button className={`navbtn ${activeTab === 'pnl-statement' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-statement')}>🧾 P&amp;L Statement</button>}
                 <button className={`navbtn ${activeTab === 'yoy-compare' ? 'active' : ''}`} onClick={() => setActiveTab('yoy-compare')}>📅 Year-over-Year</button>
                 <button className={`navbtn ${activeTab === 'occ-report' ? 'active' : ''}`} onClick={() => setActiveTab('occ-report')}>📈 Occupancy Report</button>
                 <button className={`navbtn ${activeTab === 'model-compare' ? 'active' : ''}`} onClick={() => setActiveTab('model-compare')}>🏁 Model Comparison &amp; ROI</button>
                 {allowed.includes('financing') && <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>}
                 {allowed.includes('fleet-data-report') && <button className={`navbtn ${activeTab === 'fleet-data-report' ? 'active' : ''}`} onClick={() => setActiveTab('fleet-data-report')}>🗂 Fleet Data Report</button>}
+                {allowed.includes('garage-movement') && <button className={`navbtn ${activeTab === 'garage-movement' ? 'active' : ''}`} onClick={() => setActiveTab('garage-movement')}>🔧 Garage Movement</button>}
                 {allowed.includes('investors-fleet') && <button className={`navbtn ${activeTab === 'investors-fleet' ? 'active' : ''}`} onClick={() => setActiveTab('investors-fleet')}>🤝 Investors Fleet</button>}
 
                 {showDataEntryGroup && <div className="nav-group-label">Data Entry</div>}
@@ -1734,7 +1849,9 @@ function App() {
             <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{APP_NAME} · {APP_VERSION}</div>
           </div>
           <div className="filters">
-            <ReportPeriodPicker reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />
+            {!['pnl-entry', 'occ-entry', 'veh-revenue'].includes(activeTab) && (
+              <ReportPeriodPicker reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />
+            )}
           </div>
           <div style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
             {saveStatus === 'saving' && <span style={{ color: 'var(--muted)' }}>● Saving…</span>}
@@ -1775,6 +1892,18 @@ function App() {
             </span>
             <button className="btn small" onClick={() => setActiveTab('financing')}>Go to Vehicle Financing</button>
             <button className="btn small" onClick={() => setDismissedPaymentAlert(true)}>Dismiss</button>
+          </div>
+        )}
+
+        {personalLoanReminders.length > 0 && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Personal Loan Payment Due</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {personalLoanReminders.length === 1
+                ? `${personalLoanReminders[0].loan.modelName || 'A personal loan'} has an installment ${personalLoanReminders[0].stats.overdue ? 'overdue' : 'due soon'} (${fullDateLabel(personalLoanReminders[0].stats.nextDue.dueDate)}).`
+                : `${personalLoanReminders.length} personal loans have installments due within 3 days or overdue.`} This stays visible until it's marked paid.
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('personal-finance')}>Go to Personal Finance</button>
           </div>
         )}
 
@@ -1834,9 +1963,10 @@ function App() {
 
         <div className="main-scroll no-print">
           {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} period={pnlEntryPeriod} setPeriod={setPnlEntryPeriod} monthlyRemarks={monthlyRemarks} setMonthlyRemarks={setMonthlyRemarks} insurancePolicies={insurancePolicies} insuranceOverrides={insuranceOverrides} setInsuranceOverrides={setInsuranceOverrides} />}
-          {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} />}
+          {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} agreements={agreements} garageMovements={garageMovements} />}
           {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} monthlyRemarks={monthlyRemarks} />}
+          {activeTab === 'pnl-statement' && <PnlStatement monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} companyName={companyName} viewMode={pnlStatementViewMode} setViewMode={setPnlStatementViewMode} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} orientation={pnlStatementOrientation} setOrientation={setPnlStatementOrientation} />}
           {activeTab === 'yoy-compare' && <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
           {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} remarks={occupancyRemarks} setRemarks={setOccupancyRemarks} />}
           {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} onSelectCategory={selectOccCategory} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />}
@@ -1850,8 +1980,9 @@ function App() {
           {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
           {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} rangeMonths={rangeMonths} />}
           {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
-          {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} />}
+          {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} monthKeys={monthKeys} currentPeriod={pnlEntryPeriod} />}
           {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
+          {activeTab === 'garage-movement' && <GarageMovementPanel vehicles={vehicles} agreements={agreements} garageMovements={garageMovements} setGarageMovements={setGarageMovements} deletePin={deletePin} currency={currency} />}
           {activeTab === 'investors-fleet' && <InvestorsFleetPanel vehicles={vehicles} vehicleRevenue={vehicleRevenue} rangeMonths={rangeMonths} currency={currency} />}
           {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} users={users} setUsers={setUsers} />}
@@ -1873,6 +2004,11 @@ function App() {
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`P&L Budget vs Actual · ${rangeMonths.map(monthLabel).join(' – ')}`} />
             <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
             <NotesSection rangeMonths={rangeMonths} sources={[{ remarks: monthlyRemarks, label: 'P&L Remarks' }]} isPrint />
+          </div>
+        ) : printMode === 'pnlstatement' ? (
+          <div className="pnl-statement-print" style={{ padding: 24 }}>
+            <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`P&L Statement · ${rangeMonths.map(monthLabel).join(' – ')}`} />
+            <PnlStatement monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} companyName={companyName} viewMode={pnlStatementViewMode} setViewMode={setPnlStatementViewMode} />
           </div>
         ) : printMode === 'occupancy' ? (
           <div style={{ padding: 24 }}>
@@ -2235,7 +2371,8 @@ function KpiCard({ label, value, sub, diff, rawValue, signColor }) {
 
 /* ---------------- Chart of Accounts ---------------- */
 
-function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency, year, deletePin }) {
+function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency, year, deletePin, monthKeys, currentPeriod }) {
+  const [planMode, setPlanMode] = useState('clone'); // 'clone' | 'quickset'
   const [sourceYear, setSourceYear] = useState(year - 1);
   const [targetYear, setTargetYear] = useState(year);
   const [basis, setBasis] = useState('actual'); // 'actual' | 'budget' — what the clone is based on
@@ -2298,6 +2435,19 @@ function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency,
     <div>
       <div className="panel">
         <h3>Budget Planning</h3>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${planMode === 'clone' ? 'selected' : ''}`} onClick={() => setPlanMode('clone')}>Clone from Prior Year</div>
+          <div className={`chip ${planMode === 'quickset' ? 'selected' : ''}`} onClick={() => setPlanMode('quickset')}>Quick Set</div>
+        </div>
+      </div>
+
+      {planMode === 'quickset' && (
+        <QuickSetBudgetPanel lineItems={lineItems} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} monthKeys={monthKeys || monthsOf(year)} currentPeriod={currentPeriod} />
+      )}
+
+      {planMode === 'clone' && (
+      <>
+      <div className="panel">
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
           Prepare next year's budget ahead of time by cloning a source year's figures forward, with a custom % adjustment per section. Nothing is written until you click Apply.
         </p>
@@ -2337,6 +2487,97 @@ function BudgetPlanningPanel({ lineItems, monthlyData, setMonthlyData, currency,
         <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>All figures in {currency}. A positive % increases the budget (e.g. Revenue +8%); a negative % decreases it (e.g. Direct Expenses −5% if you're cutting costs).</p>
         <button className="btn primary" style={{ marginTop: 10 }} onClick={applyClone} disabled={sourceYear === targetYear}>Apply to {targetYear}</button>
         {applied && <span style={{ marginLeft: 10, color: 'var(--green)', fontSize: 13 }}>✓ Applied — {targetYear}'s Budget has been updated. Check P&L Entry for {targetYear} to review or fine-tune individual line items.</span>}
+      </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+// "Quick Set" — apply one figure to one Budget/Actual line item across a period (Full Year /
+// Current Month / Custom Range), moved here from P&L Entry since it's a budget-planning action,
+// not a month-by-month data-entry one. The Mode dropdown (flat vs spread) is intentionally kept.
+function QuickSetBudgetPanel({ lineItems, setMonthlyData, currency, deletePin, monthKeys, currentPeriod }) {
+  const [bulkItemKey, setBulkItemKey] = useState('');
+  const [bulkFrom, setBulkFrom] = useState(monthKeys[0]);
+  const [bulkTo, setBulkTo] = useState(monthKeys[monthKeys.length - 1]);
+  const [bulkField, setBulkField] = useState('budget');
+  const [bulkMode, setBulkMode] = useState('flat');
+  const [bulkAmount, setBulkAmount] = useState('');
+  const [bulkSuccess, setBulkSuccess] = useState(false);
+
+  function applyBulkBudget() {
+    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
+    const months = periodsBetween(bulkFrom, bulkTo);
+    if (!months.length) return;
+    const amt = num(bulkAmount);
+    const perMonthAmt = bulkMode === 'spread' ? amt / months.length : amt;
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      months.forEach(p => {
+        next[p] = { ...(next[p] || {}) };
+        next[p][bulkItemKey] = { ...(next[p][bulkItemKey] || {}), [bulkField]: perMonthAmt };
+      });
+      return next;
+    });
+    setBulkAmount('');
+    setBulkSuccess(true);
+    setTimeout(() => setBulkSuccess(false), 2500);
+  }
+
+  function clearBulkRange() {
+    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
+    const itemLabel = Object.values(lineItems).flat().find(i => i.key === bulkItemKey)?.label || 'this item';
+    if (!confirmDelete(`${bulkField} for "${itemLabel}" from ${monthLabel(bulkFrom)} to ${monthLabel(bulkTo)}`, deletePin)) return;
+    const months = periodsBetween(bulkFrom, bulkTo);
+    setMonthlyData(prev => {
+      const next = { ...prev };
+      months.forEach(p => {
+        if (!next[p] || !next[p][bulkItemKey]) return;
+        next[p] = { ...next[p], [bulkItemKey]: { ...next[p][bulkItemKey], [bulkField]: '' } };
+      });
+      return next;
+    });
+  }
+
+  return (
+    <div className="panel">
+      <h3>Quick Set</h3>
+      <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Apply one figure across the full year, the current month, or any custom range — instead of retyping the same number 12 times. Works for Budget or Actual.</p>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div className="field" style={{ flex: '1 1 220px' }}>
+          <label>Line Item</label>
+          <select value={bulkItemKey} onChange={e => setBulkItemKey(e.target.value)}>
+            <option value="">Select a line item…</option>
+            {Object.keys(lineItems).map(sec => (
+              <optgroup key={sec} label={SECTION_META[sec].title}>
+                {lineItems[sec].map(it => <option key={it.key} value={it.key}>{it.label}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        <div className="field"><label>Budget or Actual</label>
+          <select value={bulkField} onChange={e => setBulkField(e.target.value)}>
+            <option value="budget">Budget</option>
+            <option value="actual">Actual</option>
+          </select>
+        </div>
+        <div className="field"><label>From</label><input type="month" value={bulkFrom} onChange={e => setBulkFrom(e.target.value)} /></div>
+        <div className="field"><label>To</label><input type="month" value={bulkTo} onChange={e => setBulkTo(e.target.value)} /></div>
+        <div className="field"><label>Mode</label>
+          <select value={bulkMode} onChange={e => setBulkMode(e.target.value)}>
+            <option value="flat">Same amount every month</option>
+            <option value="spread">Total for period, spread evenly</option>
+          </select>
+        </div>
+        <div className="field"><label>{bulkMode === 'spread' ? 'Total Amount' : 'Amount / Month'} ({currency})</label><input type="number" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button className="btn small" onClick={() => { setBulkFrom(monthKeys[0]); setBulkTo(monthKeys[monthKeys.length - 1]); }}>Full Year</button>
+        <button className="btn small" onClick={() => { setBulkFrom(currentPeriod); setBulkTo(currentPeriod); }}>Current Month</button>
+        <button className="btn primary" onClick={applyBulkBudget}>Apply</button>
+        <button className="btn danger" onClick={clearBulkRange}>Clear This Range</button>
+        {bulkSuccess && <span style={{ color: 'var(--green)', fontSize: 12.5, fontWeight: 600 }}>✓ Entry successful</span>}
       </div>
     </div>
   );
@@ -2547,13 +2788,6 @@ function NotesSection({ rangeMonths, sources, isPrint }) {
 
 function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyData, currency, deletePin, period, setPeriod, monthlyRemarks, setMonthlyRemarks, insurancePolicies, insuranceOverrides, setInsuranceOverrides }) {
   const [newItemText, setNewItemText] = useState({});
-  const [bulkItemKey, setBulkItemKey] = useState('');
-  const [bulkFrom, setBulkFrom] = useState(monthKeys[0]);
-  const [bulkTo, setBulkTo] = useState(monthKeys[monthKeys.length - 1]);
-  const [bulkField, setBulkField] = useState('budget');
-  const [bulkMode, setBulkMode] = useState('flat');
-  const [bulkAmount, setBulkAmount] = useState('');
-  const [bulkSuccess, setBulkSuccess] = useState(false);
 
 
   function resetThisPage() {
@@ -2584,40 +2818,6 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
   }
   function renameItem(sectionKey, key, newLabel) {
     setLineItems(prev => ({ ...prev, [sectionKey]: prev[sectionKey].map(it => it.key === key ? { ...it, label: newLabel } : it) }));
-  }
-
-  function applyBulkBudget() {
-    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
-    const months = periodsBetween(bulkFrom, bulkTo);
-    if (!months.length) return;
-    const amt = num(bulkAmount);
-    const perMonthAmt = bulkMode === 'spread' ? amt / months.length : amt;
-    setMonthlyData(prev => {
-      const next = { ...prev };
-      months.forEach(p => {
-        next[p] = { ...(next[p] || {}) };
-        next[p][bulkItemKey] = { ...(next[p][bulkItemKey] || {}), [bulkField]: perMonthAmt };
-      });
-      return next;
-    });
-    setBulkAmount('');
-    setBulkSuccess(true);
-    setTimeout(() => setBulkSuccess(false), 2500);
-  }
-
-  function clearBulkRange() {
-    if (!bulkItemKey || !bulkFrom || !bulkTo || bulkFrom > bulkTo) return;
-    const itemLabel = Object.values(lineItems).flat().find(i => i.key === bulkItemKey)?.label || 'this item';
-    if (!confirmDelete(`${bulkField} for "${itemLabel}" from ${monthLabel(bulkFrom)} to ${monthLabel(bulkTo)}`, deletePin)) return;
-    const months = periodsBetween(bulkFrom, bulkTo);
-    setMonthlyData(prev => {
-      const next = { ...prev };
-      months.forEach(p => {
-        if (!next[p] || !next[p][bulkItemKey]) return;
-        next[p] = { ...next[p], [bulkItemKey]: { ...next[p][bulkItemKey], [bulkField]: '' } };
-      });
-      return next;
-    });
   }
 
   const c = computeMonth(period, monthlyData, lineItems);
@@ -2741,46 +2941,6 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Amounts in {currency}</span>
           <button className="btn small" style={{ color: 'var(--red)', borderColor: 'var(--red)' }} onClick={resetThisPage}>Reset This Page</button>
-        </div>
-      </div>
-
-      <div className="panel">
-        <h3>Set Budget for a Period</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Apply one figure across the full year, a specific month, or any custom range — instead of retyping the same number 12 times. Works for Budget or Actual.</p>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="field" style={{ flex: '1 1 220px' }}>
-            <label>Line Item</label>
-            <select value={bulkItemKey} onChange={e => setBulkItemKey(e.target.value)}>
-              <option value="">Select a line item…</option>
-              {Object.keys(lineItems).map(sec => (
-                <optgroup key={sec} label={SECTION_META[sec].title}>
-                  {lineItems[sec].map(it => <option key={it.key} value={it.key}>{it.label}</option>)}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <div className="field"><label>From</label><input type="month" value={bulkFrom} onChange={e => setBulkFrom(e.target.value)} /></div>
-          <div className="field"><label>To</label><input type="month" value={bulkTo} onChange={e => setBulkTo(e.target.value)} /></div>
-          <div className="field"><label>Apply to</label>
-            <select value={bulkField} onChange={e => setBulkField(e.target.value)}>
-              <option value="budget">Budget</option>
-              <option value="actual">Actual</option>
-            </select>
-          </div>
-          <div className="field"><label>Mode</label>
-            <select value={bulkMode} onChange={e => setBulkMode(e.target.value)}>
-              <option value="flat">Same amount every month</option>
-              <option value="spread">Total for period, spread evenly</option>
-            </select>
-          </div>
-          <div className="field"><label>{bulkMode === 'spread' ? 'Total Amount' : 'Amount / Month'} ({currency})</label><input type="number" value={bulkAmount} onChange={e => setBulkAmount(e.target.value)} /></div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn small" onClick={() => { setBulkFrom(monthKeys[0]); setBulkTo(monthKeys[monthKeys.length - 1]); }}>Full Year</button>
-          <button className="btn small" onClick={() => { setBulkFrom(period); setBulkTo(period); }}>Just Current Month</button>
-          <button className="btn primary" onClick={applyBulkBudget}>Apply</button>
-          <button className="btn danger" onClick={clearBulkRange}>Clear This Range</button>
-          {bulkSuccess && <span style={{ color: 'var(--green)', fontSize: 12.5, fontWeight: 600 }}>✓ Entry successful</span>}
         </div>
       </div>
 
@@ -3068,10 +3228,11 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
                       );
                     }
                     const v = rowVariance(budget, actual, row.kind);
+                    const isNet = row.type === 'net';
                     return (
                       <Fragment key={p}>
-                        <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint }}>{fmtNum(budget)}</td>
-                        <td className="num" style={{ background: tint }}>{fmtNum(actual)}</td>
+                        <td className="num" style={{ borderLeft: '2px solid #C9CCC3', background: tint, ...(isNet ? { color: netAmountColor(budget) } : {}) }}>{fmtNum(budget)}</td>
+                        <td className="num" style={{ background: tint, ...(isNet ? { color: netAmountColor(actual) } : {}) }}>{fmtNum(actual)}</td>
                         <td className="num" style={{ background: tint }}><span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span></td>
                       </Fragment>
                     );
@@ -3084,8 +3245,8 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
                     </Fragment>
                   ) : (
                     <Fragment>
-                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700 }}>{fmtNum(ptBudget)}</td>
-                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{fmtNum(ptActual)}</td>
+                      <td className="num" style={{ borderLeft: '3px solid var(--steel)', background: '#EAF0F3', fontWeight: 700, ...(row.type === 'net' ? { color: netAmountColor(ptBudget) } : {}) }}>{fmtNum(ptBudget)}</td>
+                      <td className="num" style={{ background: '#EAF0F3', fontWeight: 700, ...(row.type === 'net' ? { color: netAmountColor(ptActual) } : {}) }}>{fmtNum(ptActual)}</td>
                       <td className="num" style={{ background: '#EAF0F3', fontWeight: 700 }}>{(() => { const v = rowVariance(ptBudget, ptActual, row.kind); return <span className={`badge ${v.favorable ? 'pos' : 'neg'}`}>{v.pct === null ? '—' : pctStr(v.pct)}</span>; })()}</td>
                     </Fragment>
                   ))}
@@ -3100,8 +3261,154 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
   );
 }
 
-/* ---------------- Occupancy Entry ---------------- */
+/* ---------------- P&L Statement (one-page, Chart-of-Accounts order) ---------------- */
+function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName, viewMode, setViewMode, reportFrom, setReportFrom, reportTo, setReportTo, orientation, setOrientation }) {
+  const totals = rangeAggregate(monthKeys, monthlyData, lineItems);
+  const periodLabel = monthKeys.length ? (monthKeys.length === 1 ? monthLabel(monthKeys[0]) : monthLabel(monthKeys[0]) + ' – ' + monthLabel(monthKeys[monthKeys.length - 1])) : '—';
 
+  // Total Expenses here means Direct + Indirect only (Interest is shown as its own section
+  // further down, matching a traditional P&L layout) — distinct from computeMonth's internal
+  // "totalexp" which also folds in Interest.
+  const totalExpBudget = totals.direct_budget + totals.indirect_budget;
+  const totalExpActual = totals.direct_actual + totals.indirect_actual;
+
+  // Columns are sized close to what the data actually needs (not stretched evenly) — the
+  // label and figure columns stay narrow, and whatever space is left over becomes a blank
+  // Remarks column at the end, rather than padding out the numbers themselves.
+  const dataColCount = viewMode === 'both' ? 3 : 1;
+  const labelPct = viewMode === 'both' ? 26 : 30;
+  const dataColPct = viewMode === 'both' ? 13 : 14;
+  const remarksPct = 100 - labelPct - dataColCount * dataColPct;
+  const totalCols = 1 + dataColCount + 1; // label + data + remarks
+  const numCellStyle = { textAlign: 'center' };
+
+  function ItemRow({ item, indent }) {
+    const budget = rangeItemTotal(item, monthlyData, monthKeys, 'budget');
+    const actual = rangeItemTotal(item, monthlyData, monthKeys, 'actual');
+    return (
+      <tr>
+        <td style={{ paddingLeft: 16 + indent * 18 }}>{item.label}</td>
+        {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={numCellStyle}>{fmtNum(budget)}</td>}
+        {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={numCellStyle}>{fmtNum(actual)}</td>}
+        {viewMode === 'both' && <td className="num" style={numCellStyle}>{budget !== 0 ? pctStr((actual - budget) / Math.abs(budget)) : '—'}</td>}
+        <td></td>
+      </tr>
+    );
+  }
+
+  function Section({ sectionKey, title, kind }) {
+    const items = lineItems[sectionKey];
+    const sectionBudget = totals[sectionKey === 'revenue' ? 'income_budget' : sectionKey + '_budget'];
+    const sectionActual = totals[sectionKey === 'revenue' ? 'income_actual' : sectionKey + '_actual'];
+    const sv = rowVariance(sectionBudget, sectionActual, kind);
+    return (
+      <>
+        <tr className="subtotal-row"><td colSpan={totalCols} style={{ textAlign: 'left' }}>{title}</td></tr>
+        {items.map(item => (
+          <Fragment key={item.key}>
+            <ItemRow item={item} indent={item.subAccounts && item.subAccounts.length ? 0 : 0} />
+            {(item.subAccounts || []).map(sub => <ItemRow key={sub.key} item={sub} indent={1} />)}
+          </Fragment>
+        ))}
+        <tr className="totalexp-row">
+          <td style={{ textAlign: 'left' }}>Total {title}</td>
+          {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={numCellStyle}>{fmtNum(sectionBudget)}</td>}
+          {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={numCellStyle}>{fmtNum(sectionActual)}</td>}
+          {viewMode === 'both' && <td className="num" style={numCellStyle}><span className={`badge ${sv.favorable ? 'pos' : 'neg'}`}>{sv.pct === null ? '—' : pctStr(sv.pct)}</span></td>}
+          <td></td>
+        </tr>
+      </>
+    );
+  }
+
+  function GrandRow({ label, budget, actual, highlight }) {
+    const color = highlight ? netAmountColor(actual) : undefined;
+    return (
+      <tr className="net-row">
+        <td style={{ textAlign: 'left', color }}>{label}</td>
+        {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={{ ...numCellStyle, color }}>{fmtNum(budget)}</td>}
+        {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={{ ...numCellStyle, color }}>{fmtNum(actual)}</td>}
+        {viewMode === 'both' && <td className="num" style={numCellStyle}>{budget !== 0 ? pctStr((actual - budget) / Math.abs(budget)) : '—'}</td>}
+        <td></td>
+      </tr>
+    );
+  }
+
+  return (
+    <div>
+      <style>{`
+        @media print {
+          .pnl-statement-table table th, .pnl-statement-table table td { padding: 1.5px 5px !important; font-size: 8.8px !important; line-height: 1.15 !important; }
+          .pnl-statement-table tr.subtotal-row td, .pnl-statement-table tr.totalexp-row td, .pnl-statement-table tr.net-row td { padding: 2px 5px !important; }
+          .pnl-statement-print > div:first-child { padding: 10px 16px !important; margin-bottom: 8px !important; }
+          .pnl-statement-print > div:first-child h1 { font-size: 15px !important; }
+          .pnl-statement-print > div:first-child p { font-size: 10.5px !important; margin-top: 2px !important; }
+          .pnl-statement-signature { margin-top: 96px !important; }
+          .pnl-statement-print .panel { padding: 6px 0 !important; margin-bottom: 6px !important; border: none !important; }
+        }
+      `}</style>
+      <div className="panel">
+        <h3 style={{ margin: 0 }}>P&amp;L Statement — {periodLabel}</h3>
+        <p className="no-print" style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 4 }}>A single combined statement in your own Chart of Accounts order — Income, Direct Expenses, Indirect Expenses, Interest &amp; Bank Charges, then Net Profit. All figures in {currency}.</p>
+        <div className="no-print" style={{ display: 'flex', gap: 14, marginTop: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {setReportFrom && <ReportPeriodPicker reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div className={`chip ${viewMode === 'both' ? 'selected' : ''}`} onClick={() => setViewMode('both')}>Budget vs Actual</div>
+            <div className={`chip ${viewMode === 'budget' ? 'selected' : ''}`} onClick={() => setViewMode('budget')}>Budget Only</div>
+            <div className={`chip ${viewMode === 'actual' ? 'selected' : ''}`} onClick={() => setViewMode('actual')}>Actual Only</div>
+          </div>
+          {setOrientation && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div className={`chip ${orientation !== 'landscape' ? 'selected' : ''}`} onClick={() => setOrientation('portrait')}>📄 Portrait</div>
+              <div className={`chip ${orientation === 'landscape' ? 'selected' : ''}`} onClick={() => setOrientation('landscape')}>📃 Landscape</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="panel pnl-statement-table">
+        <table style={{ tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: labelPct + '%' }} />
+            {Array.from({ length: dataColCount }).map((_, i) => <col key={i} style={{ width: dataColPct + '%' }} />)}
+            <col style={{ width: remarksPct + '%' }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Account</th>
+              {(viewMode === 'both' || viewMode === 'budget') && <th className="num" style={numCellStyle}>Budget</th>}
+              {(viewMode === 'both' || viewMode === 'actual') && <th className="num" style={numCellStyle}>Actual</th>}
+              {viewMode === 'both' && <th className="num" style={numCellStyle}>Var %</th>}
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Section sectionKey="revenue" title="Income" kind="income" />
+            <Section sectionKey="direct" title="Direct Expenses" kind="expense" />
+            <Section sectionKey="indirect" title="Indirect Expenses" kind="expense" />
+            <GrandRow label="Total Expenses (Direct + Indirect)" budget={totalExpBudget} actual={totalExpActual} />
+            <GrandRow label="Gross Profit" budget={totals.ebitda_budget} actual={totals.ebitda_actual} />
+            <Section sectionKey="interest" title="Interest & Bank Charges" kind="expense" />
+            <Section sectionKey="belowLine" title="Other Income" kind="income" />
+            <GrandRow label="Net Profit / Loss" budget={totals.netprofit_budget} actual={totals.netprofit_actual} highlight />
+          </tbody>
+        </table>
+
+        <div className="pnl-statement-signature" style={{ marginTop: 96, width: 280, border: '1px solid #999', borderRadius: 4 }}>
+          <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, padding: '9px 12px 3px' }}>Manager Accounts</div>
+          <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, padding: '0 12px 9px' }}>{companyName || 'Company Name'}</div>
+          <div style={{ padding: '8px 12px', fontSize: 11.5, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span>Date:</span>
+            <span style={{ flex: 1, borderBottom: '1px solid var(--ink)', height: 1 }}></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ---------------- Occupancy Entry ---------------- */
 function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, remarks, setRemarks }) {
   const [period, setPeriod] = useState(monthKeys[0]);
   const [search, setSearch] = useState('');
@@ -3747,11 +4054,12 @@ function FeasibilityDetail({ study, onChange, currency }) {
           </table>
         </div>
 
-        <div className="panel" style={{ background: '#F7F8F5' }}>
-          <h3>Verdict</h3>
-          <table>
-            <tbody><tr><td style={{ border: 'none', padding: '4px 0' }}>{verdictPhrase}</td></tr></tbody>
-          </table>
+        <div className="panel" style={{ marginTop: 18, border: `1px solid ${verdictColor(c.verdict)}`, borderRadius: 10, background: verdictColor(c.verdict) + '12' }}>
+          <h3 style={{ margin: 0, color: verdictColor(c.verdict) }}>Verdict</h3>
+          <div style={{ fontSize: 16, fontWeight: 700, color: verdictColor(c.verdict), marginTop: 8 }}>
+            {c.verdict}{c.gapPct !== null ? ` — market rate is ${pctStr(c.gapPct)} vs required` : ''}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--ink)', marginTop: 6, lineHeight: 1.5 }}>{verdictPhrase}</div>
         </div>
       </div>
     );
@@ -4010,7 +4318,7 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
   );
 }
 
-function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePin }) {
+function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePin, isPersonal }) {
   const stats = loanStats(loan);
   const [deferFrom, setDeferFrom] = useState(stats.nextDue ? stats.nextDue.number : 1);
   const [deferMonths, setDeferMonths] = useState(1);
@@ -4091,23 +4399,38 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePi
     <div>
       <div className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ margin: 0 }}>Loan Details {!showDetails && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— {loan.modelName || '(unnamed)'}, {fmt(loanAmount(loan), currency)} at {loan.interestRate || 0}%</span>}</h3>
+          <h3 style={{ margin: 0 }}>Loan Details {!showDetails && <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— {loan.modelName || '(unnamed)'}, {fmt(loanAmount(loan), currency)} at {loan.interestRate || 0}%/{loan.interestRateBasis === 'month' ? 'mo' : 'yr'}</span>}</h3>
           <button className="btn small" onClick={() => setShowDetails(!showDetails)}>{showDetails ? 'Hide' : 'Edit Loan Details'}</button>
         </div>
         {showDetails && (
         <>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-          <div className="field" style={{ flex: '1 1 180px' }}><label>Vehicle / Model</label><input value={loan.modelName} onChange={e => onChange({ modelName: e.target.value })} placeholder="Nissan Patrol" /></div>
+          <div className="field" style={{ flex: '1 1 180px' }}><label>{isPersonal ? 'Description' : 'Vehicle / Model'}</label><input value={loan.modelName} onChange={e => onChange({ modelName: e.target.value })} placeholder={isPersonal ? 'Home Renovation Loan' : 'Nissan Patrol'} /></div>
+          {!isPersonal && (
           <div className="field" style={{ flex: '1 1 160px' }}><label>Link to Fleet Vehicle (optional)</label>
             <select value={loan.vehicleId} onChange={e => onChange({ vehicleId: e.target.value })}>
               <option value="">— not linked —</option>
               {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
             </select>
           </div>
+          )}
           <div className="field" style={{ flex: '1 1 160px' }}><label>Lender / Bank</label><input value={loan.lender} onChange={e => onChange({ lender: e.target.value })} /></div>
+          {isPersonal && (
+            <div className="field" style={{ flex: '1 1 200px' }}>
+              <label>Loan Type</label>
+              <select value={PERSONAL_LOAN_TYPES.includes(loan.loanType) ? loan.loanType : (loan.loanType ? 'other' : '')} onChange={e => onChange({ loanType: e.target.value === 'other' ? ' ' : e.target.value })}>
+                <option value="">Select loan type…</option>
+                {PERSONAL_LOAN_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                <option value="other">Other (specify)</option>
+              </select>
+              {(loan.loanType && !PERSONAL_LOAN_TYPES.includes(loan.loanType)) && (
+                <input value={loan.loanType.trim()} onChange={e => onChange({ loanType: e.target.value })} placeholder="Type name…" style={{ marginTop: 6 }} />
+              )}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Car Value ({currency})</label><input type="number" value={loan.carValue} onChange={e => onChange({ carValue: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}><label>{isPersonal ? `Loan Amount (${currency})` : `Car Value (${currency})`}</label><input type="number" value={loan.carValue} onChange={e => onChange({ carValue: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Down Payment ({currency})</label><input type="number" value={loan.downPayment} onChange={e => onChange({ downPayment: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 140px' }}><label>Processing / Other Fee</label><input type="number" value={loan.processingFee} onChange={e => onChange({ processingFee: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 160px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
@@ -4117,7 +4440,16 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePi
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Interest Rate % / Year</label><input type="number" value={loan.interestRate} onChange={e => onChange({ interestRate: e.target.value })} /></div>
+          <div className="field" style={{ flex: '1 1 140px' }}>
+            <label>Interest Rate</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input type="number" value={loan.interestRate} onChange={e => onChange({ interestRate: e.target.value })} style={{ flex: 1 }} />
+              <select value={loan.interestRateBasis || 'year'} onChange={e => onChange({ interestRateBasis: e.target.value })} style={{ flex: '0 0 110px' }}>
+                <option value="year">% per Year</option>
+                <option value="month">% per Month</option>
+              </select>
+            </div>
+          </div>
           <div className="field" style={{ flex: '1 1 100px' }}><label>Term</label><input type="number" value={loan.termValue} onChange={e => onChange({ termValue: e.target.value })} /></div>
           <div className="field" style={{ flex: '1 1 110px' }}><label>Unit</label>
             <select value={loan.termUnit} onChange={e => onChange({ termUnit: e.target.value })}>
@@ -4132,11 +4464,11 @@ function FinancingDetail({ loan, vehicles, onChange, currency, onPrint, deletePi
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
           <div style={{ flex: '1 1 160px' }}>
             <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated Monthly EMI</div>
-            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loan.interestRate, loanTermMonths(loan)), currency)}</div>
+            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loanAnnualRate(loan), loanTermMonths(loan)), currency)}</div>
           </div>
           <div style={{ flex: '1 1 200px' }}>
             <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Estimated Total Payable (Loan + Interest)</div>
-            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loan.interestRate, loanTermMonths(loan)) * loanTermMonths(loan), currency)}</div>
+            <div className="mono" style={{ fontSize: 18 }}>{fmt(calcEMI(loanAmount(loan), loanAnnualRate(loan), loanTermMonths(loan)) * loanTermMonths(loan), currency)}</div>
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--muted)', alignSelf: 'flex-end' }}>= (Loan Amount + Interest Rate × Years Financed) ÷ months. Generate the schedule below for exact figures.</div>
         </div>
@@ -4322,28 +4654,79 @@ function LoanScheduleReport({ loan, companyName, currency }) {
 
 /* ---------------- Vehicles ---------------- */
 
+const CATEGORY_PRESETS = ['Economy Cars', 'Luxury Cars', 'Small Cars', 'Office Use Cars'];
+
+// The same field layout is used by both the Add form (top of the Vehicles page) and the
+// Edit modal — defined once at module scope (not nested inside VehiclesPanel) so React
+// treats it as a stable component across renders; a component defined inside another
+// component's body gets recreated every render, which would make every input lose focus
+// after each keystroke.
+function VehicleFields({ f, setF, currency }) {
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="field" style={{ flex: '1 1 160px' }}><label>Model / Vehicle Name</label><input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Nissan Sunny" /></div>
+        <div className="field" style={{ flex: '1 1 120px' }}><label>Plate</label><input value={f.plate} onChange={e => setF({ ...f, plate: e.target.value })} placeholder="9182-G" /></div>
+        <div className="field" style={{ flex: '1 1 100px' }}><label>Model Year</label><input type="number" value={f.modelYear} onChange={e => setF({ ...f, modelYear: e.target.value })} placeholder="2023" /></div>
+        <div className="field" style={{ flex: '1 1 160px' }}>
+          <label>Category</label>
+          <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
+          <datalist id="category-presets">{CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}</datalist>
+        </div>
+        <div className="field" style={{ flex: '1 1 130px' }}>
+          <label>Car Color</label>
+          <select value={f.color} onChange={e => setF({ ...f, color: e.target.value })}>
+            <option value="">Select color…</option>
+            {CAR_COLOR_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={f.purchaseValue} onChange={e => setF({ ...f, purchaseValue: e.target.value })} placeholder="50000" /></div>
+        <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={f.usefulLifeOverride} onChange={e => setF({ ...f, usefulLifeOverride: e.target.value })} placeholder="uses 4-yr default" /></div>
+        <div className="field" style={{ flex: '1 1 150px' }}><label>Purchase Date</label><input type="date" value={f.purchaseDate} onChange={e => setF({ ...f, purchaseDate: e.target.value })} /></div>
+        <div className="field" style={{ flex: '1 1 150px' }}><label>Registration Expiry</label><input type="date" value={f.registrationExpiry} onChange={e => setF({ ...f, registrationExpiry: e.target.value })} /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
+        <div className="field" style={{ flex: '1 1 160px' }}>
+          <label>Ownership Type</label>
+          <select value={f.ownershipType} onChange={e => setF({ ...f, ownershipType: e.target.value })}>
+            <option value="owned">Owned</option>
+            <option value="sublease">Sub-Lease (borrowed)</option>
+            <option value="investor">Investor Vehicle</option>
+          </select>
+        </div>
+        {f.ownershipType === 'investor' && (
+          <>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Company Commission %</label><input type="number" value={f.investorCommissionPct} onChange={e => setF({ ...f, investorCommissionPct: e.target.value })} placeholder="20-30" /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Investor Name / Contact</label><input value={f.investorName} onChange={e => setF({ ...f, investorName: e.target.value })} /></div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
-  const [form, setForm] = useState({ name: '', plate: '', modelYear: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' });
+  const emptyForm = { name: '', plate: '', modelYear: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' };
+  const [addForm, setAddForm] = useState(emptyForm);
   const [bulkText, setBulkText] = useState('');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState(emptyForm);
   const [saleModalId, setSaleModalId] = useState(null);
   const [saleDateInput, setSaleDateInput] = useState('');
   const [saleValueInput, setSaleValueInput] = useState('');
-  const CATEGORY_PRESETS = ['Economy Cars', 'Luxury Cars', 'Small Cars', 'Office Use Cars'];
-  const emptyForm = { name: '', plate: '', modelYear: '', category: '', color: '', purchaseValue: '', usefulLifeOverride: '', purchaseDate: '', registrationExpiry: '', ownershipType: 'owned', investorCommissionPct: '', investorName: '' };
 
   function addVehicle() {
-    if (!form.name.trim()) return;
-    if (editId) {
-      setVehicles(vehicles.map(v => v.id === editId ? { ...v, ...form } : v));
-      setEditId(null);
-    } else {
-      setVehicles([...vehicles, { id: uid('veh'), ...form }]);
-    }
-    setForm(emptyForm);
+    if (!addForm.name.trim()) return;
+    setVehicles([...vehicles, { id: uid('veh'), ...addForm }]);
+    setAddForm(emptyForm);
   }
-  function editVehicle(v) { setEditId(v.id); setForm({ name: v.name, plate: v.plate, modelYear: v.modelYear || '', category: v.category || '', color: v.color || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '', purchaseDate: v.purchaseDate || '', registrationExpiry: v.registrationExpiry || '', ownershipType: v.ownershipType || 'owned', investorCommissionPct: v.investorCommissionPct || '', investorName: v.investorName || '' }); }
+  function editVehicle(v) { setEditId(v.id); setEditForm({ name: v.name, plate: v.plate, modelYear: v.modelYear || '', category: v.category || '', color: v.color || '', purchaseValue: v.purchaseValue || '', usefulLifeOverride: v.usefulLifeOverride || '', purchaseDate: v.purchaseDate || '', registrationExpiry: v.registrationExpiry || '', ownershipType: v.ownershipType || 'owned', investorCommissionPct: v.investorCommissionPct || '', investorName: v.investorName || '' }); }
+  function saveEditVehicle() {
+    if (!editForm.name.trim()) { window.alert('Model / Vehicle Name is required.'); return; }
+    setVehicles(vehicles.map(v => v.id === editId ? { ...v, ...editForm } : v));
+    setEditId(null);
+  }
   function deleteVehicle(v) { if (!confirmDelete(v.name, deletePin)) return; setVehicles(vehicles.filter(x => x.id !== v.id)); }
   function bulkAdd() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -4365,6 +4748,18 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
 
   return (
     <div>
+      {editId && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setEditId(null)}>
+          <div className="panel" style={{ width: 640, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', background: '#fff' }} onClick={e => e.stopPropagation()}>
+            <h3>Edit Vehicle</h3>
+            <VehicleFields f={editForm} setF={setEditForm} currency={currency} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <button className="btn primary" onClick={saveEditVehicle}>Update Vehicle</button>
+              <button className="btn" onClick={() => setEditId(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {saleModalId && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSaleModalId(null)}>
           <div className="panel" style={{ width: 360, background: '#fff' }} onClick={e => e.stopPropagation()}>
@@ -4380,47 +4775,10 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
         </div>
       )}
       <div className="panel">
-        <h3>{editId ? 'Edit Vehicle' : 'Add Vehicle'}</h3>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <div className="field" style={{ flex: '1 1 160px' }}><label>Model / Vehicle Name</label><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Nissan Sunny" /></div>
-          <div className="field" style={{ flex: '1 1 120px' }}><label>Plate</label><input value={form.plate} onChange={e => setForm({ ...form, plate: e.target.value })} placeholder="9182-G" /></div>
-          <div className="field" style={{ flex: '1 1 100px' }}><label>Model Year</label><input type="number" value={form.modelYear} onChange={e => setForm({ ...form, modelYear: e.target.value })} placeholder="2023" /></div>
-          <div className="field" style={{ flex: '1 1 160px' }}>
-            <label>Category</label>
-            <input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Economy Cars" list="category-presets" />
-            <datalist id="category-presets">{CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}</datalist>
-          </div>
-          <div className="field" style={{ flex: '1 1 130px' }}>
-            <label>Car Color</label>
-            <select value={form.color} onChange={e => setForm({ ...form, color: e.target.value })}>
-              <option value="">Select color…</option>
-              {CAR_COLOR_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Purchase Value ({currency})</label><input type="number" value={form.purchaseValue} onChange={e => setForm({ ...form, purchaseValue: e.target.value })} placeholder="50000" /></div>
-          <div className="field" style={{ flex: '1 1 140px' }}><label>Useful Life Override (yrs, optional)</label><input type="number" value={form.usefulLifeOverride} onChange={e => setForm({ ...form, usefulLifeOverride: e.target.value })} placeholder="uses 4-yr default" /></div>
-          <div className="field" style={{ flex: '1 1 150px' }}><label>Purchase Date</label><input type="date" value={form.purchaseDate} onChange={e => setForm({ ...form, purchaseDate: e.target.value })} /></div>
-          <div className="field" style={{ flex: '1 1 150px' }}><label>Registration Expiry</label><input type="date" value={form.registrationExpiry} onChange={e => setForm({ ...form, registrationExpiry: e.target.value })} /></div>
-        </div>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10, background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
-          <div className="field" style={{ flex: '1 1 160px' }}>
-            <label>Ownership Type</label>
-            <select value={form.ownershipType} onChange={e => setForm({ ...form, ownershipType: e.target.value })}>
-              <option value="owned">Owned</option>
-              <option value="sublease">Sub-Lease (borrowed)</option>
-              <option value="investor">Investor Vehicle</option>
-            </select>
-          </div>
-          {form.ownershipType === 'investor' && (
-            <>
-              <div className="field" style={{ flex: '1 1 140px' }}><label>Company Commission %</label><input type="number" value={form.investorCommissionPct} onChange={e => setForm({ ...form, investorCommissionPct: e.target.value })} placeholder="20-30" /></div>
-              <div className="field" style={{ flex: '1 1 160px' }}><label>Investor Name / Contact</label><input value={form.investorName} onChange={e => setForm({ ...form, investorName: e.target.value })} /></div>
-            </>
-          )}
-        </div>
+        <h3>Add Vehicle</h3>
+        <VehicleFields f={addForm} setF={setAddForm} currency={currency} />
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <button className="btn primary" onClick={addVehicle}>{editId ? 'Update Vehicle' : '+ Add Vehicle'}</button>
-          {editId && <button className="btn" onClick={() => { setEditId(null); setForm(emptyForm); }}>Cancel</button>}
+          <button className="btn primary" onClick={addVehicle}>+ Add Vehicle</button>
         </div>
       </div>
       <div className="panel">
@@ -4487,6 +4845,24 @@ function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, dele
   const [tab, setTab] = useState('loans');
   const [selectedLoanId, setSelectedLoanId] = useState(loans[0] ? loans[0].id : null);
   const [selectedCardId, setSelectedCardId] = useState(cards[0] ? cards[0].id : null);
+  const [selectedLoanIds, setSelectedLoanIds] = useState([]);
+
+  useEffect(() => {
+    if (selectedLoanIds.length === 1) setSelectedLoanId(selectedLoanIds[0]);
+  }, [selectedLoanIds]);
+
+  const displayLoans = selectedLoanIds.length ? loans.filter(l => selectedLoanIds.includes(l.id)) : loans;
+  const loanTotals = displayLoans.reduce((acc, l) => {
+    const s = loanStats(l);
+    acc.principalBalance += s.balancePrincipal;
+    acc.interestBalance += s.balanceInterest;
+    acc.monthlyEMI += s.monthlyEMI;
+    acc.totalFinanced += s.totalAmount;
+    acc.totalPaid += s.paidAmount;
+    if (s.overdue) acc.overdueCount++;
+    return acc;
+  }, { principalBalance: 0, interestBalance: 0, monthlyEMI: 0, overdueCount: 0, totalFinanced: 0, totalPaid: 0 });
+  const loanPaidPct = loanTotals.totalFinanced ? loanTotals.totalPaid / loanTotals.totalFinanced : 0;
 
   function addLoan() {
     const l = emptyLoan();
@@ -4520,20 +4896,44 @@ function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, dele
 
       {tab === 'loans' && (
         <>
+          {loans.length > 0 && (
+            <div className="panel">
+              <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— filters the totals and table below</span></h3>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div className={`chip ${selectedLoanIds.length === 0 ? 'selected' : ''}`} onClick={() => setSelectedLoanIds([])}>All Loans</div>
+                {loans.map(l => (
+                  <div key={l.id} className={`chip ${selectedLoanIds.includes(l.id) ? 'selected' : ''}`} onClick={() => setSelectedLoanIds(selectedLoanIds.includes(l.id) ? selectedLoanIds.filter(id => id !== l.id) : [...selectedLoanIds, l.id])}>{l.modelName || '(unnamed)'}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {loans.length > 0 && (
+            <div className="kpi-row">
+              <div className="kpi-card"><div className="label">Total Loan Amount (Payable)</div><div className="value mono">{fmt(loanTotals.totalFinanced, currency)}</div></div>
+              <div className="kpi-card"><div className="label">Total Paid</div><div className="value mono" style={{ color: 'var(--green)' }}>{fmt(loanTotals.totalPaid, currency)}</div><div className="sub" style={{ color: 'var(--muted)' }}>{pctStr(loanPaidPct)} of total</div></div>
+              <div className="kpi-card"><div className="label">Total Remaining</div><div className="value mono">{fmt(loanTotals.principalBalance + loanTotals.interestBalance, currency)}</div></div>
+              <div className="kpi-card"><div className="label">Total Interest</div><div className="value mono">{fmt(loanTotals.interestBalance, currency)}</div></div>
+              <div className="kpi-card"><div className="label">Overdue Loans</div><div className="value mono" style={{ color: loanTotals.overdueCount ? 'var(--red)' : 'var(--ink)' }}>{loanTotals.overdueCount}</div></div>
+            </div>
+          )}
+
           <div className="panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <h3 style={{ margin: 0 }}>Personal Loans</h3>
+              <h3 style={{ margin: 0 }}>Personal Loans {selectedLoanIds.length > 0 ? `(${displayLoans.length} of ${loans.length} shown)` : ''}</h3>
               <button className="btn primary" onClick={addLoan}>+ Add Loan</button>
             </div>
             {loans.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No personal loans added yet.</p> : (
               <table>
-                <thead><tr><th>Description</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th></th></tr></thead>
+                <thead><tr><th>Description</th><th>Loan Type</th><th>Lender</th><th className="num">Loan Amount</th><th className="num">Monthly EMI</th><th className="num">Paid</th><th></th></tr></thead>
                 <tbody>
-                  {loans.map(l => {
+                  {displayLoans.map(l => {
                     const s = loanStats(l);
                     return (
                       <tr key={l.id} style={{ background: l.id === selectedLoanId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedLoanId(l.id)}>
-                        <td>{l.modelName}</td><td>{l.lender || '—'}</td>
+                        <td>{l.modelName}</td>
+                        <td>{l.loanType ? <span className="badge" style={{ background: '#EAF3F8', color: 'var(--steel)' }}>{l.loanType}</span> : '—'}</td>
+                        <td>{l.lender || '—'}</td>
                         <td className="num">{fmt(loanAmount(l), currency)}</td>
                         <td className="num">{fmt(s.monthlyEMI, currency)}</td>
                         <td className="num">{pctStr(s.paidPct)}</td>
@@ -4545,7 +4945,7 @@ function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, dele
               </table>
             )}
           </div>
-          {selectedLoan && <FinancingDetail loan={selectedLoan} vehicles={[]} onChange={patch => updateLoan(selectedLoan.id, patch)} currency={currency} deletePin={deletePin} />}
+          {selectedLoan && <FinancingDetail loan={selectedLoan} vehicles={[]} onChange={patch => updateLoan(selectedLoan.id, patch)} currency={currency} deletePin={deletePin} isPersonal />}
         </>
       )}
 
@@ -4772,6 +5172,113 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
   );
 }
 
+/* ---------------- Garage Movement ---------------- */
+function GarageMovementPanel({ vehicles, agreements, garageMovements, setGarageMovements, deletePin, currency }) {
+  const [selectedId, setSelectedId] = useState(garageMovements[0] ? garageMovements[0].id : null);
+  const [filter, setFilter] = useState('open'); // 'open' | 'all'
+
+  function addMovement() {
+    const m = emptyGarageMovement();
+    setGarageMovements([...garageMovements, m]);
+    setSelectedId(m.id);
+  }
+  function updateMovement(id, patch) {
+    setGarageMovements(garageMovements.map(m => {
+      if (m.id !== id) return m;
+      const next = { ...m, ...patch };
+      // Keep the Movement Number in sync with Garage Name / In Date while still editable by hand.
+      if ((patch.garageName !== undefined || patch.movementInDate !== undefined) && (!m.movementNumberEdited)) {
+        next.movementNumber = generateMovementNumber(next.garageName, next.movementInDate);
+      }
+      return next;
+    }));
+  }
+  function deleteMovement(m) {
+    if (!confirmDelete(m.movementNumber || 'this movement record', deletePin)) return;
+    setGarageMovements(garageMovements.filter(x => x.id !== m.id));
+    if (selectedId === m.id) setSelectedId(null);
+  }
+
+  const displayMovements = (filter === 'open' ? garageMovements.filter(m => !m.movementOutDate) : garageMovements)
+    .slice().sort((a, b) => (b.movementInDate || '').localeCompare(a.movementInDate || ''));
+  const selected = garageMovements.find(m => m.id === selectedId);
+  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.name} (${v.plate})` : '—'; };
+
+  const statusCounts = vehicles.reduce((acc, v) => {
+    const st = vehicleFleetStatus(v, agreements, garageMovements).status;
+    acc[st] = (acc[st] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      <div className="kpi-row">
+        <div className="kpi-card"><div className="label">Currently In Garage</div><div className="value mono">{statusCounts.garage || 0}</div></div>
+        <div className="kpi-card"><div className="label">Rented</div><div className="value mono">{statusCounts.rented || 0}</div></div>
+        <div className="kpi-card"><div className="label">Available</div><div className="value mono">{statusCounts.available || 0}</div></div>
+      </div>
+
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Garage Movements</h3>
+          <button className="btn primary" onClick={addMovement}>+ New Movement</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <div className={`chip ${filter === 'open' ? 'selected' : ''}`} onClick={() => setFilter('open')}>Currently In Garage ({garageMovements.filter(m => !m.movementOutDate).length})</div>
+          <div className={`chip ${filter === 'all' ? 'selected' : ''}`} onClick={() => setFilter('all')}>All ({garageMovements.length})</div>
+        </div>
+        {displayMovements.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>No garage movement records{filter === 'open' ? ' currently open' : ''}.</p>
+        ) : (
+          <table>
+            <thead><tr><th>Movement #</th><th>Vehicle</th><th>Garage</th><th>Purpose</th><th>In Date</th><th>Out Date</th><th></th></tr></thead>
+            <tbody>
+              {displayMovements.map(m => (
+                <tr key={m.id} style={{ background: m.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(m.id)}>
+                  <td>{m.movementNumber || '—'}</td>
+                  <td>{vehicleName(m.vehicleId)}</td>
+                  <td>{m.garageName || '—'}</td>
+                  <td>{m.purpose || '—'}</td>
+                  <td>{m.movementInDate ? fullDateLabel(m.movementInDate) : '—'}</td>
+                  <td>{m.movementOutDate ? fullDateLabel(m.movementOutDate) : <span className="badge neg">Still In Garage</span>}</td>
+                  <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteMovement(m); }}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && (
+        <div className="panel">
+          <h3>Movement Details</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 180px' }}><label>Vehicle</label>
+              <select value={selected.vehicleId} onChange={e => updateMovement(selected.id, { vehicleId: e.target.value })}>
+                <option value="">Select vehicle…</option>
+                {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Garage Name</label><input value={selected.garageName} onChange={e => updateMovement(selected.id, { garageName: e.target.value })} placeholder="Al Falah Garage" /></div>
+            <div className="field" style={{ flex: '1 1 200px' }}><label>Movement Number</label>
+              <input value={selected.movementNumber} onChange={e => updateMovement(selected.id, { movementNumber: e.target.value, movementNumberEdited: true })} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+            <div className="field" style={{ flex: '1 1 220px' }}><label>Purpose</label><input value={selected.purpose} onChange={e => updateMovement(selected.id, { purpose: e.target.value })} placeholder="Accident repair, service, paint…" /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Estimated Cost ({currency})</label><input type="number" value={selected.estimatedCost} onChange={e => updateMovement(selected.id, { estimatedCost: e.target.value })} /></div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Movement In Date</label><input type="date" value={selected.movementInDate} onChange={e => updateMovement(selected.id, { movementInDate: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Movement Out Date</label><input type="date" value={selected.movementOutDate} onChange={e => updateMovement(selected.id, { movementOutDate: e.target.value })} /></div>
+          </div>
+          <div className="field" style={{ marginTop: 10 }}><label>Remarks</label><textarea rows={3} value={selected.remarks} onChange={e => updateMovement(selected.id, { remarks: e.target.value })} style={{ width: '100%' }} /></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function emptyAgreement() {
   return {
     id: uid('agr'), raNumber: '', plate: '', vehicleId: '', customerName: '',
@@ -4854,6 +5361,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   const [form, setForm] = useState(emptyForm);
   const [view, setView] = useState('open'); // 'open' | 'closed' | 'void' | 'all' | 'add' | 'import'
   const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'daily' | 'monthly'
+  const [ownershipFilter, setOwnershipFilter] = useState('all'); // 'all' | 'owned' | 'sublease' | 'investor'
   const [closingId, setClosingId] = useState(null);
   const [closeDateInput, setCloseDateInput] = useState(todayStr());
   const [closeRateInput, setCloseRateInput] = useState('');
@@ -5084,10 +5592,26 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   }
 
   const typeMatches = a => typeFilter === 'all' || a.type === typeFilter;
-  const openAgreements = sortAgreements(agreements.filter(a => a.status === 'open' && typeMatches(a)), sortField, sortDir);
-  const closedAgreements = sortAgreements(agreements.filter(a => a.status === 'closed' && typeMatches(a)), sortField, sortDir);
-  const voidAgreements = sortAgreements(agreements.filter(a => a.status === 'void' && typeMatches(a)), sortField, sortDir);
-  const filtered = sortAgreements(agreements.filter(a => typeMatches(a) && (!search || (a.raNumber || '').toLowerCase().includes(search.toLowerCase()) || (a.plate || '').toLowerCase().includes(search.toLowerCase()) || (a.customerName || '').toLowerCase().includes(search.toLowerCase()))), sortField, sortDir);
+  function ownershipOf(a) {
+    const v = a.vehicleId ? vehicles.find(x => x.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
+    if (!v) return 'sublease';
+    return v.ownershipType === 'investor' ? 'investor' : v.ownershipType === 'sublease' ? 'sublease' : 'owned';
+  }
+  const ownershipMatches = a => ownershipFilter === 'all' || ownershipOf(a) === ownershipFilter;
+  function searchMatches(a) {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    const v = a.vehicleId ? vehicles.find(x => x.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
+    return (a.raNumber || '').toLowerCase().includes(q)
+      || (a.plate || '').toLowerCase().includes(q)
+      || (a.customerName || '').toLowerCase().includes(q)
+      || (v && v.name && v.name.toLowerCase().includes(q));
+  }
+  const matchesAll = a => typeMatches(a) && ownershipMatches(a) && searchMatches(a);
+  const openAgreements = sortAgreements(agreements.filter(a => a.status === 'open' && matchesAll(a)), sortField, sortDir);
+  const closedAgreements = sortAgreements(agreements.filter(a => a.status === 'closed' && matchesAll(a)), sortField, sortDir);
+  const voidAgreements = sortAgreements(agreements.filter(a => a.status === 'void' && matchesAll(a)), sortField, sortDir);
+  const filtered = sortAgreements(agreements.filter(matchesAll), sortField, sortDir);
 
   return (
     <div>
@@ -5205,12 +5729,22 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <div className={`chip ${view === 'import' ? 'selected' : ''}`} onClick={() => setView('import')}>Import / Paste</div>
         </div>
         {(view === 'open' || view === 'closed' || view === 'void' || view === 'all') && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700 }}>TYPE:</span>
-            <div className={`chip ${typeFilter === 'all' ? 'selected' : ''}`} onClick={() => setTypeFilter('all')}>All Types</div>
-            <div className={`chip ${typeFilter === 'daily' ? 'selected' : ''}`} onClick={() => setTypeFilter('daily')}>Daily</div>
-            <div className={`chip ${typeFilter === 'monthly' ? 'selected' : ''}`} onClick={() => setTypeFilter('monthly')}>Monthly</div>
-            <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700, marginLeft: 12 }}>SORT BY:</span>
+          <div style={{ marginTop: 10 }}>
+            <input placeholder="Search by RA#, customer, plate, or car name…" value={search} onChange={e => setSearch(e.target.value)}
+              style={{ width: '100%', maxWidth: 420, border: '1px solid var(--line)', borderRadius: 7, padding: '7px 12px', fontSize: 13, boxSizing: 'border-box', marginBottom: 10 }} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700 }}>TYPE:</span>
+              <div className={`chip ${typeFilter === 'all' ? 'selected' : ''}`} onClick={() => setTypeFilter('all')}>All Types</div>
+              <div className={`chip ${typeFilter === 'daily' ? 'selected' : ''}`} onClick={() => setTypeFilter('daily')}>Daily</div>
+              <div className={`chip ${typeFilter === 'monthly' ? 'selected' : ''}`} onClick={() => setTypeFilter('monthly')}>Monthly</div>
+              <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700, marginLeft: 12 }}>OWNERSHIP:</span>
+              <div className={`chip ${ownershipFilter === 'all' ? 'selected' : ''}`} onClick={() => setOwnershipFilter('all')}>All</div>
+              <div className={`chip ${ownershipFilter === 'owned' ? 'selected' : ''}`} onClick={() => setOwnershipFilter('owned')}>Owned</div>
+              <div className={`chip ${ownershipFilter === 'sublease' ? 'selected' : ''}`} onClick={() => setOwnershipFilter('sublease')}>Sub-Lease</div>
+              <div className={`chip ${ownershipFilter === 'investor' ? 'selected' : ''}`} onClick={() => setOwnershipFilter('investor')}>Investor</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 700 }}>SORT BY:</span>
             <select value={sortField} onChange={e => setSortField(e.target.value)} style={{ padding: '5px 8px', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12.5 }}>
               <option value="raNumber">RA# (Sequence)</option>
               <option value="startDate">Start Date</option>
@@ -5220,6 +5754,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
             <button className="btn small" onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')} title={sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}>
               {sortDir === 'asc' ? '▲ Asc' : '▼ Desc'}
             </button>
+            </div>
           </div>
         )}
       </div>
@@ -5360,10 +5895,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
 
       {view === 'all' && (
         <div className="panel" style={{ overflowX: 'auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <h3 style={{ margin: 0 }}>All Agreements</h3>
-            <input placeholder="Search RA#, plate, or customer" value={search} onChange={e => setSearch(e.target.value)} style={{ border: '1px solid var(--line)', borderRadius: 7, padding: '5px 10px', fontSize: 12.5, width: 220 }} />
-          </div>
+          <h3 style={{ margin: '0 0 10px' }}>All Agreements</h3>
           <table>
             <thead><tr><th>S.No</th><th>RA#</th><th>Customer</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Months</th><th className="num">Days</th><th className="num">Rate</th><th className="num">Revenue</th><th></th></tr></thead>
             <tbody>
@@ -6109,14 +6641,25 @@ function ImportPanel({ lineItems, setLineItems, monthlyData, setMonthlyData, mon
 
 /* ---------------- Quick Review (executive one-page summary) ---------------- */
 
-function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, vehicleRevenue, defaultUsefulLife, occupancy, baseDays, widgets, setWidgets, overdueLoans, setActiveTab }) {
+function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineItems, monthlyData, vehicles, vehicleRevenue, defaultUsefulLife, occupancy, baseDays, widgets, setWidgets, overdueLoans, setActiveTab, agreements, garageMovements }) {
   const [customizing, setCustomizing] = useState(false);
   const qr = computeQuickReview(rangeMonths, monthlyData, lineItems, vehicles, occupancy, baseDays);
   const periodLabel = rangeMonths.length ? (rangeMonths.length === 1 ? monthLabel(rangeMonths[0]) : monthLabel(rangeMonths[0]) + ' – ' + monthLabel(rangeMonths[rangeMonths.length - 1])) : '—';
   const roiRows = vehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }));
   const topModels = roiRows.slice().sort((a, b) => (b.stats.coverage ?? -1) - (a.stats.coverage ?? -1)).slice(0, 5);
 
-  const WIDGET_LABELS = { netProfit: 'Net Profit / Loss', totalRevenue: 'Total Revenue', occupancy: 'Fleet Occupancy', topModels: 'Top Performing Models', budgetVsActual: 'Budget vs Actual Chart', alerts: 'Alerts (Payment Due, etc.)' };
+  // Owned fleet only — Investor and Sub-Lease vehicles are excluded from this split, matching
+  // how the rest of the app treats "owned fleet totals" separately from Investor/Sub-Lease.
+  const ownedVehicles = vehicles.filter(v => (v.ownershipType || 'owned') === 'owned');
+  const fleetStatuses = ownedVehicles.map(v => ({ vehicle: v, ...vehicleFleetStatus(v, agreements, garageMovements) }));
+  const rentedCount = fleetStatuses.filter(f => f.status === 'rented').length;
+  const garageCount = fleetStatuses.filter(f => f.status === 'garage').length;
+  const availableVehicles = fleetStatuses.filter(f => f.status === 'available');
+  const availableCount = availableVehicles.length;
+  const ownedTotal = ownedVehicles.length;
+  const idleList = availableVehicles.map(f => ({ vehicle: f.vehicle, idle: idleDaysSince(f.vehicle, agreements) })).sort((a, b) => (b.idle ? b.idle.days : -1) - (a.idle ? a.idle.days : -1));
+
+  const WIDGET_LABELS = { netProfit: 'Net Profit / Loss', totalRevenue: 'Total Revenue', occupancy: 'Fleet Occupancy', fleetStatus: 'Fleet Status (Available/Rented/In Garage)', topModels: 'Top Performing Models', budgetVsActual: 'Budget vs Actual Chart', alerts: 'Alerts (Payment Due, etc.)' };
 
   return (
     <div>
@@ -6175,6 +6718,46 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
           </div>
         )}
       </div>
+
+      {widgets.fleetStatus && ownedTotal > 0 && (
+        <div className="panel">
+          <h3>Fleet Status — Owned Fleet ({ownedTotal} vehicles)</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginTop: 6 }}>
+            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Available</div>
+              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: '#3E9C6E' }}>{availableCount}/{ownedTotal}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? availableCount / ownedTotal : 0)}</div>
+            </div>
+            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Rented</div>
+              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: '#2D6E8E' }}>{rentedCount}/{ownedTotal}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? rentedCount / ownedTotal : 0)}</div>
+            </div>
+            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>In Garage</div>
+              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--amber)' }}>{garageCount}/{ownedTotal}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? garageCount / ownedTotal : 0)}</div>
+            </div>
+          </div>
+          {idleList.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>Idle Days (Available vehicles)</div>
+              <table>
+                <thead><tr><th>Vehicle</th><th className="num">Idle Since</th><th className="num">Idle Days</th></tr></thead>
+                <tbody>
+                  {idleList.slice(0, 8).map(({ vehicle, idle }) => (
+                    <tr key={vehicle.id}>
+                      <td>{vehicle.name} ({vehicle.plate})</td>
+                      <td className="num">{idle ? fullDateLabel(idle.lastCloseDate) : '—'}</td>
+                      <td className="num">{idle ? <span className={`badge ${idle.days > 14 ? 'neg' : 'pos'}`}>{idle.days} day{idle.days === 1 ? '' : 's'}</span> : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {widgets.budgetVsActual && (
         <div className="panel">
