@@ -225,10 +225,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-118';
+const APP_VERSION = 'Version 2026-121';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "P&L Statement sign-off box refined: now reads 'Manager Accounts' / company name / Date, with a thin grey border around the whole box and no divider line in the middle — the Date field gets its own short solid underline instead.";
+const APP_WHATS_NEW = "Idle Vehicles on the Dashboard now falls back to Occupancy Entry data (marked 'Est.') when a vehicle has no closed Agreement on record — fixes cars like Kia Sorento that are tracked only via manual Occupancy Entry. Garage Movement's vehicle dropdown and table now lead with plate number, matching how you actually search.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -343,13 +343,28 @@ function vehicleFleetStatus(vehicle, agreements, garageMovements) {
 
 // For an Available vehicle: days since its most recently CLOSED agreement ended. Returns
 // null if the vehicle has never had a closed agreement (nothing to measure idle time from).
-function idleDaysSince(vehicle, agreements) {
+function idleDaysSince(vehicle, agreements, occupancy) {
   const closed = (agreements || [])
     .filter(a => a.status === 'closed' && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || (a.plate || '').trim().toLowerCase() === (vehicle.plate || '').trim().toLowerCase()))
     .sort((a, b) => (a.closeDate < b.closeDate ? 1 : -1));
-  if (!closed.length) return null;
-  const days = Math.round((new Date(todayStr()) - new Date(closed[0].closeDate)) / 86400000);
-  return { days, lastCloseDate: closed[0].closeDate };
+  if (closed.length) {
+    const days = Math.round((new Date(todayStr()) - new Date(closed[0].closeDate)) / 86400000);
+    return { days, lastCloseDate: closed[0].closeDate, source: 'agreement' };
+  }
+  // Fallback for vehicles whose rental history is tracked via manual Occupancy Entry rather
+  // than Agreements — find the most recent month with any occupied days logged, and treat
+  // the last day of that month as the last-rented date (approximate, since Occupancy Entry
+  // only records a day count per month, not exact dates).
+  if (occupancy) {
+    const occupiedMonths = Object.keys(occupancy).filter(p => num((occupancy[p] || {})[vehicle.id]) > 0).sort().reverse();
+    if (occupiedMonths.length) {
+      const [y, m] = occupiedMonths[0].split('-').map(Number);
+      const endOfMonth = new Date(y, m, 0);
+      const days = Math.round((new Date(todayStr()) - endOfMonth) / 86400000);
+      return { days, lastCloseDate: endOfMonth.toISOString().slice(0, 10), source: 'occupancy' };
+    }
+  }
+  return null;
 }
 
 function findVehicleByPlate(vehicles, plate) {
@@ -593,8 +608,6 @@ function applySheetFormatting(ws, labelColWidth, dataColWidth, numCols) {
 // order (with sub-accounts indented) as the on-screen report.
 function buildPnlStatementRows(rangeMonths, lineItems, monthlyData) {
   const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
-  const totalExpBudget = totals.direct_budget + totals.indirect_budget;
-  const totalExpActual = totals.direct_actual + totals.indirect_actual;
   const rows = [['Account', 'Budget', 'Actual', 'Variance']];
 
   function itemRow(item, indent) {
@@ -616,9 +629,11 @@ function buildPnlStatementRows(rangeMonths, lineItems, monthlyData) {
 
   section('revenue', 'Income');
   section('direct', 'Direct Expenses');
+  rows.push(['Gross Profit', Math.round(totals.gross_budget), Math.round(totals.gross_actual), Math.round(totals.gross_actual - totals.gross_budget)]);
+  rows.push(['Gross Profit %', pctStr(totals.grossPct_budget), pctStr(totals.grossPct_actual), '']);
+  rows.push([]);
   section('indirect', 'Indirect Expenses');
-  rows.push(['Total Expenses (Direct + Indirect)', Math.round(totalExpBudget), Math.round(totalExpActual), Math.round(totalExpActual - totalExpBudget)]);
-  rows.push(['Gross Profit', Math.round(totals.ebitda_budget), Math.round(totals.ebitda_actual), Math.round(totals.ebitda_actual - totals.ebitda_budget)]);
+  rows.push(['EBITDA', Math.round(totals.ebitda_budget), Math.round(totals.ebitda_actual), Math.round(totals.ebitda_actual - totals.ebitda_budget)]);
   rows.push([]);
   section('interest', 'Interest & Bank Charges');
   section('belowLine', 'Other Income');
@@ -1077,6 +1092,32 @@ function HBarList({ data, maxVal }) {
           <div className="hbar-val">{d.display !== undefined ? d.display : d.value}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Simple donut/pie chart via CSS conic-gradient — used for the Dashboard's Fleet Status
+// widget. `slices` is [{ label, value, color }]; zero-total renders a flat grey ring.
+function PieChart({ slices, size = 120 }) {
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  let acc = 0;
+  const stops = total > 0 ? slices.map(s => {
+    const from = acc / total * 100;
+    acc += s.value;
+    const to = acc / total * 100;
+    return `${s.color} ${from}% ${to}%`;
+  }).join(', ') : '#E3E6DF 0% 100%';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+      <div style={{ width: size, height: size, borderRadius: '50%', background: `conic-gradient(${stops})`, flexShrink: 0 }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {slices.map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, flexShrink: 0 }}></span>
+            <span>{s.label} — {s.value}{total > 0 ? ` (${pctStr(s.value / total)})` : ''}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3266,12 +3307,6 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
   const totals = rangeAggregate(monthKeys, monthlyData, lineItems);
   const periodLabel = monthKeys.length ? (monthKeys.length === 1 ? monthLabel(monthKeys[0]) : monthLabel(monthKeys[0]) + ' – ' + monthLabel(monthKeys[monthKeys.length - 1])) : '—';
 
-  // Total Expenses here means Direct + Indirect only (Interest is shown as its own section
-  // further down, matching a traditional P&L layout) — distinct from computeMonth's internal
-  // "totalexp" which also folds in Interest.
-  const totalExpBudget = totals.direct_budget + totals.indirect_budget;
-  const totalExpActual = totals.direct_actual + totals.indirect_actual;
-
   // Columns are sized close to what the data actually needs (not stretched evenly) — the
   // label and figure columns stay narrow, and whatever space is left over becomes a blank
   // Remarks column at the end, rather than padding out the numbers themselves.
@@ -3334,6 +3369,18 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
     );
   }
 
+  function PctRow({ label, budgetPct, actualPct }) {
+    return (
+      <tr className="subtotal-row">
+        <td style={{ textAlign: 'left' }}>{label}</td>
+        {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={numCellStyle}>{pctStr(budgetPct)}</td>}
+        {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={numCellStyle}>{pctStr(actualPct)}</td>}
+        {viewMode === 'both' && <td className="num" style={numCellStyle}>—</td>}
+        <td></td>
+      </tr>
+    );
+  }
+
   return (
     <div>
       <style>{`
@@ -3385,9 +3432,10 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
           <tbody>
             <Section sectionKey="revenue" title="Income" kind="income" />
             <Section sectionKey="direct" title="Direct Expenses" kind="expense" />
+            <GrandRow label="Gross Profit" budget={totals.gross_budget} actual={totals.gross_actual} />
+            <PctRow label="Gross Profit %" budgetPct={totals.grossPct_budget} actualPct={totals.grossPct_actual} />
             <Section sectionKey="indirect" title="Indirect Expenses" kind="expense" />
-            <GrandRow label="Total Expenses (Direct + Indirect)" budget={totalExpBudget} actual={totalExpActual} />
-            <GrandRow label="Gross Profit" budget={totals.ebitda_budget} actual={totals.ebitda_actual} />
+            <GrandRow label="EBITDA" budget={totals.ebitda_budget} actual={totals.ebitda_actual} />
             <Section sectionKey="interest" title="Interest & Bank Charges" kind="expense" />
             <Section sectionKey="belowLine" title="Other Income" kind="income" />
             <GrandRow label="Net Profit / Loss" budget={totals.netprofit_budget} actual={totals.netprofit_actual} highlight />
@@ -5202,7 +5250,7 @@ function GarageMovementPanel({ vehicles, agreements, garageMovements, setGarageM
   const displayMovements = (filter === 'open' ? garageMovements.filter(m => !m.movementOutDate) : garageMovements)
     .slice().sort((a, b) => (b.movementInDate || '').localeCompare(a.movementInDate || ''));
   const selected = garageMovements.find(m => m.id === selectedId);
-  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.name} (${v.plate})` : '—'; };
+  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.plate} — ${v.name}` : '—'; };
 
   const statusCounts = vehicles.reduce((acc, v) => {
     const st = vehicleFleetStatus(v, agreements, garageMovements).status;
@@ -5256,7 +5304,7 @@ function GarageMovementPanel({ vehicles, agreements, garageMovements, setGarageM
             <div className="field" style={{ flex: '1 1 180px' }}><label>Vehicle</label>
               <select value={selected.vehicleId} onChange={e => updateMovement(selected.id, { vehicleId: e.target.value })}>
                 <option value="">Select vehicle…</option>
-                {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
+                {vehicles.slice().sort((a, b) => (a.plate || '').localeCompare(b.plate || '')).map(v => <option key={v.id} value={v.id}>{v.plate} — {v.name}</option>)}
               </select>
             </div>
             <div className="field" style={{ flex: '1 1 160px' }}><label>Garage Name</label><input value={selected.garageName} onChange={e => updateMovement(selected.id, { garageName: e.target.value })} placeholder="Al Falah Garage" /></div>
@@ -6657,7 +6705,7 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
   const availableVehicles = fleetStatuses.filter(f => f.status === 'available');
   const availableCount = availableVehicles.length;
   const ownedTotal = ownedVehicles.length;
-  const idleList = availableVehicles.map(f => ({ vehicle: f.vehicle, idle: idleDaysSince(f.vehicle, agreements) })).sort((a, b) => (b.idle ? b.idle.days : -1) - (a.idle ? a.idle.days : -1));
+  const idleList = availableVehicles.map(f => ({ vehicle: f.vehicle, idle: idleDaysSince(f.vehicle, agreements, occupancy) })).sort((a, b) => (b.idle ? b.idle.days : -1) - (a.idle ? a.idle.days : -1));
 
   const WIDGET_LABELS = { netProfit: 'Net Profit / Loss', totalRevenue: 'Total Revenue', occupancy: 'Fleet Occupancy', fleetStatus: 'Fleet Status (Available/Rented/In Garage)', topModels: 'Top Performing Models', budgetVsActual: 'Budget vs Actual Chart', alerts: 'Alerts (Payment Due, etc.)' };
 
@@ -6719,55 +6767,47 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
         )}
       </div>
 
-      {widgets.fleetStatus && ownedTotal > 0 && (
-        <div className="panel">
-          <h3>Fleet Status — Owned Fleet ({ownedTotal} vehicles)</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14, marginTop: 6 }}>
-            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Available</div>
-              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: '#3E9C6E' }}>{availableCount}/{ownedTotal}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? availableCount / ownedTotal : 0)}</div>
-            </div>
-            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Rented</div>
-              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: '#2D6E8E' }}>{rentedCount}/{ownedTotal}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? rentedCount / ownedTotal : 0)}</div>
-            </div>
-            <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>In Garage</div>
-              <div className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--amber)' }}>{garageCount}/{ownedTotal}</div>
-              <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>{pctStr(ownedTotal ? garageCount / ownedTotal : 0)}</div>
-            </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        {widgets.budgetVsActual && (
+          <div className="panel" style={{ flex: '1 1 380px' }}>
+            <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
+            <GroupedBarChart data={[
+              { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
+              { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
+              { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
+              { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
+            ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
           </div>
-          {idleList.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>Idle Days (Available vehicles)</div>
-              <table>
-                <thead><tr><th>Vehicle</th><th className="num">Idle Since</th><th className="num">Idle Days</th></tr></thead>
-                <tbody>
-                  {idleList.slice(0, 8).map(({ vehicle, idle }) => (
-                    <tr key={vehicle.id}>
-                      <td>{vehicle.name} ({vehicle.plate})</td>
-                      <td className="num">{idle ? fullDateLabel(idle.lastCloseDate) : '—'}</td>
-                      <td className="num">{idle ? <span className={`badge ${idle.days > 14 ? 'neg' : 'pos'}`}>{idle.days} day{idle.days === 1 ? '' : 's'}</span> : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+        )}
 
-      {widgets.budgetVsActual && (
+        {widgets.fleetStatus && ownedTotal > 0 && (
+          <div className="panel" style={{ flex: '1 1 320px' }}>
+            <h3>Fleet Status — Owned Fleet ({ownedTotal})</h3>
+            <PieChart size={130} slices={[
+              { label: 'Rented', value: rentedCount, color: '#2D6E8E' },
+              { label: 'Available', value: availableCount, color: '#3E9C6E' },
+              { label: 'In Garage', value: garageCount, color: '#D98E3F' },
+            ]} />
+          </div>
+        )}
+      </div>
+
+      {widgets.fleetStatus && ownedTotal > 0 && idleList.length > 0 && (
         <div className="panel">
-          <h3>Budget vs Actual — Revenue, Expenses, Profit</h3>
-          <GroupedBarChart data={[
-            { label: 'Revenue', budget: qr.totals.income_budget, actual: qr.totals.income_actual },
-            { label: 'Expenses', budget: qr.totals.totalexp_budget, actual: qr.totals.totalexp_actual },
-            { label: 'Gross Profit', budget: qr.totals.gross_budget, actual: qr.totals.gross_actual },
-            { label: 'Net Profit', budget: qr.totals.netprofit_budget, actual: qr.totals.netprofit_actual },
-          ]} series={[{ key: 'budget', label: 'Budget', color: '#C9D6DC' }, { key: 'actual', label: 'Actual', color: '#2D6E8E' }]} height={180} />
+          <h3>Idle Vehicles — Days Since Last Rental</h3>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Based on the last closed Agreement where available; for vehicles tracked only through Occupancy Entry, "Est." shows an approximate date (end of the last month with recorded occupancy).</p>
+          <table>
+            <thead><tr><th>Vehicle</th><th className="num">Idle Since</th><th className="num">Idle Days</th></tr></thead>
+            <tbody>
+              {idleList.slice(0, 8).map(({ vehicle, idle }) => (
+                <tr key={vehicle.id}>
+                  <td>{vehicle.name} ({vehicle.plate})</td>
+                  <td className="num">{idle ? (idle.source === 'occupancy' ? 'Est. ' : '') + fullDateLabel(idle.lastCloseDate) : '—'}</td>
+                  <td className="num">{idle ? <span className={`badge ${idle.days > 14 ? 'neg' : 'pos'}`}>{idle.days} day{idle.days === 1 ? '' : 's'}</span> : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
