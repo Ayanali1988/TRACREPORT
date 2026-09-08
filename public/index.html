@@ -175,7 +175,7 @@ const ADMIN_ONLY_TABS = ['settings'];
 const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance', 'budget-planning'];
 const VIEWER_HIDDEN_TABS = [...ADMIN_ONLY_TABS, ...ADMIN_MANAGER_TABS, 'financing', 'feasibility'];
 function TAB_GROUPS_FOR_ROLE(role) {
-  const all = ['dashboard', 'quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
+  const all = ['dashboard', 'quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'nrm-log', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
   if (role === 'admin') return all;
   if (role === 'manager') return all.filter(t => !ADMIN_ONLY_TABS.includes(t) && t !== 'financing' && t !== 'feasibility' && t !== 'personal-finance');
   return all.filter(t => !VIEWER_HIDDEN_TABS.includes(t) && t !== 'personal-finance');
@@ -203,6 +203,12 @@ function carColorHex(name) { return CAR_COLOR_HEX[name] || '#9AA0A6'; }
 function uid(p) { return p + '_' + Math.random().toString(36).slice(2, 9); }
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 function todayStr() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function ddmmyyyy(dateStr) {
+  const parts = String(dateStr).split('-').map(Number);
+  if (parts.length < 3) return dateStr;
+  const [y, m, d] = parts;
+  return String(d).padStart(2, '0') + '/' + String(m).padStart(2, '0') + '/' + y;
+}
 
 // Allows typing a simple arithmetic expression (e.g. "6500+2522") directly into a number
 // cell; evaluated on blur. Restricted to digits/operators/parens only — never passed to
@@ -225,10 +231,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-121';
+const APP_VERSION = 'Version 2026-130';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "Idle Vehicles on the Dashboard now falls back to Occupancy Entry data (marked 'Est.') when a vehicle has no closed Agreement on record — fixes cars like Kia Sorento that are tracked only via manual Occupancy Entry. Garage Movement's vehicle dropdown and table now lead with plate number, matching how you actually search.";
+const APP_WHATS_NEW = "New: Import Movements Report (Agreements → Import Movements Report). Reads your vehicle-movement log and routes each row by Type: Agreement rows detect Ref#s with more than one vehicle and split the existing agreement into a proper replacement chain using exact Date Time Out/In; Workshop (...) rows go to Garage Movement; NRM (...) rows go to a brand-new Staff Usage tracker (new tab). Each category previews separately before you apply it — nothing saves automatically.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -983,13 +989,22 @@ function computeFeasibility(study) {
   return { netAmount, months, workingDaysMonth, totalWorkingDays, annualExpenseTotal, lifeExpenseTotal, costBase, profitTotal, grandTotal, requiredDailyRate, emi, scenarios, gapPct, verdict };
 }
 
-function confirmDelete(label, deletePin) {
-  if (!window.confirm('Delete "' + label + '"? This cannot be undone.')) return false;
+// Generic PIN-gated confirmation with a caller-supplied message — used for any action that
+// should require the security PIN (delete, reopen, etc.) without hardcoding "delete" wording.
+function confirmWithPin(message, deletePin) {
+  if (!window.confirm(message)) return false;
   if (deletePin) {
-    const entered = window.prompt('Enter the security PIN to confirm deletion:');
-    if (entered !== deletePin) { window.alert('Incorrect PIN — deletion cancelled.'); return false; }
+    const entered = window.prompt('Enter the security PIN to confirm:');
+    if (entered !== deletePin) { window.alert('Incorrect PIN — action cancelled.'); return false; }
   }
   return true;
+}
+function confirmDelete(label, deletePin) {
+  return confirmWithPin('Delete "' + label + '"? This cannot be undone.', deletePin);
+}
+// For non-destructive confirmations where the PIN doesn't apply.
+function confirmAction(message) {
+  return window.confirm(message);
 }
 
 /* ---------------- small chart components (dependency-free) ---------------- */
@@ -1269,6 +1284,7 @@ function App() {
   const [dashboardWidgets, setDashboardWidgets] = useState({ netProfit: true, totalRevenue: true, occupancy: true, fleetStatus: true, topModels: true, budgetVsActual: true, alerts: true });
   const [agreements, setAgreements] = useState([]);
   const [garageMovements, setGarageMovements] = useState([]);
+  const [nrmLogs, setNrmLogs] = useState([]);
   const [agreementPeriod, setAgreementPeriod] = useState(year + '-01');
   const [lastAgreementReview, setLastAgreementReview] = useState('');
   const [lastDailyAgreementCheck, setLastDailyAgreementCheck] = useState('');
@@ -1308,7 +1324,7 @@ function App() {
   }
 
   function currentFullState() {
-    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements };
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs };
   }
 
   async function performSave(pwOverride) {
@@ -1379,6 +1395,7 @@ function App() {
         if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
         if (data.agreements) setAgreements(data.agreements);
         if (data.garageMovements) setGarageMovements(data.garageMovements);
+        if (data.nrmLogs) setNrmLogs(data.nrmLogs);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1428,7 +1445,7 @@ function App() {
     if (!loaded || !authed) return;
     const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs, loaded, authed]);
 
   // Keep every month's insurance Actual figure in sync with the auto-calculated policy
   // total (skipping any month the user has explicitly overridden) — runs across all
@@ -1611,6 +1628,7 @@ function App() {
         if (data.dashboardWidgets) setDashboardWidgets(data.dashboardWidgets);
         if (data.agreements) setAgreements(data.agreements);
         if (data.garageMovements) setGarageMovements(data.garageMovements);
+        if (data.nrmLogs) setNrmLogs(data.nrmLogs);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1842,6 +1860,7 @@ function App() {
                 {allowed.includes('financing') && <button className={`navbtn ${activeTab === 'financing' ? 'active' : ''}`} onClick={() => setActiveTab('financing')}>🏦 Vehicle Financing</button>}
                 {allowed.includes('fleet-data-report') && <button className={`navbtn ${activeTab === 'fleet-data-report' ? 'active' : ''}`} onClick={() => setActiveTab('fleet-data-report')}>🗂 Fleet Data Report</button>}
                 {allowed.includes('garage-movement') && <button className={`navbtn ${activeTab === 'garage-movement' ? 'active' : ''}`} onClick={() => setActiveTab('garage-movement')}>🔧 Garage Movement</button>}
+                {allowed.includes('nrm-log') && <button className={`navbtn ${activeTab === 'nrm-log' ? 'active' : ''}`} onClick={() => setActiveTab('nrm-log')}>🧍 Staff Usage (NRM)</button>}
                 {allowed.includes('investors-fleet') && <button className={`navbtn ${activeTab === 'investors-fleet' ? 'active' : ''}`} onClick={() => setActiveTab('investors-fleet')}>🤝 Investors Fleet</button>}
 
                 {showDataEntryGroup && <div className="nav-group-label">Data Entry</div>}
@@ -2020,10 +2039,11 @@ function App() {
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
           {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} rangeMonths={rangeMonths} />}
-          {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} />}
+          {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} garageMovements={garageMovements} setGarageMovements={setGarageMovements} nrmLogs={nrmLogs} setNrmLogs={setNrmLogs} />}
           {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} monthKeys={monthKeys} currentPeriod={pnlEntryPeriod} />}
           {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
           {activeTab === 'garage-movement' && <GarageMovementPanel vehicles={vehicles} agreements={agreements} garageMovements={garageMovements} setGarageMovements={setGarageMovements} deletePin={deletePin} currency={currency} />}
+          {activeTab === 'nrm-log' && <NrmLogPanel vehicles={vehicles} nrmLogs={nrmLogs} setNrmLogs={setNrmLogs} deletePin={deletePin} />}
           {activeTab === 'investors-fleet' && <InvestorsFleetPanel vehicles={vehicles} vehicleRevenue={vehicleRevenue} rangeMonths={rangeMonths} currency={currency} />}
           {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} users={users} setUsers={setUsers} />}
@@ -3306,25 +3326,34 @@ function PnlCompare({ monthKeys, lineItems, monthlyData, currency, reportFrom, s
 function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName, viewMode, setViewMode, reportFrom, setReportFrom, reportTo, setReportTo, orientation, setOrientation }) {
   const totals = rangeAggregate(monthKeys, monthlyData, lineItems);
   const periodLabel = monthKeys.length ? (monthKeys.length === 1 ? monthLabel(monthKeys[0]) : monthLabel(monthKeys[0]) + ' – ' + monthLabel(monthKeys[monthKeys.length - 1])) : '—';
+  const [expandedKeys, setExpandedKeys] = useState({});
+  const toggleExpand = (key) => setExpandedKeys(prev => ({ ...prev, [key]: !prev[key] }));
 
   // Columns are sized close to what the data actually needs (not stretched evenly) — the
   // label and figure columns stay narrow, and whatever space is left over becomes a blank
-  // Remarks column at the end, rather than padding out the numbers themselves.
+  // Remarks column at the end, rather than padding out the numbers themselves. Single-value
+  // views (Budget Only / Actual Only) give the label and figure column more room instead of
+  // leaving Remarks disproportionately wide, so the single column doesn't look stranded.
   const dataColCount = viewMode === 'both' ? 3 : 1;
-  const labelPct = viewMode === 'both' ? 26 : 30;
-  const dataColPct = viewMode === 'both' ? 13 : 14;
+  const labelPct = viewMode === 'both' ? 26 : 48;
+  const dataColPct = viewMode === 'both' ? 13 : 16;
   const remarksPct = 100 - labelPct - dataColCount * dataColPct;
   const totalCols = 1 + dataColCount + 1; // label + data + remarks
   const numCellStyle = { textAlign: 'center' };
 
-  function ItemRow({ item, indent }) {
+  function ItemRow({ item, indent, hasSubs, expanded, onToggle }) {
     const budget = rangeItemTotal(item, monthlyData, monthKeys, 'budget');
     const actual = rangeItemTotal(item, monthlyData, monthKeys, 'actual');
     return (
       <tr>
-        <td style={{ paddingLeft: 16 + indent * 18 }}>{item.label}</td>
-        {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={numCellStyle}>{fmtNum(budget)}</td>}
-        {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={numCellStyle}>{fmtNum(actual)}</td>}
+        <td style={{ paddingLeft: 16 + indent * 18, fontWeight: hasSubs ? 700 : 400 }}>
+          {hasSubs && (
+            <span onClick={onToggle} className="no-print" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, borderRadius: 3, border: '1px solid var(--line)', marginRight: 6, cursor: 'pointer', fontSize: 11, lineHeight: 1, color: 'var(--muted)', userSelect: 'none' }}>{expanded ? '−' : '+'}</span>
+          )}
+          {item.label}
+        </td>
+        {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={{ ...numCellStyle, fontWeight: hasSubs ? 700 : 400 }}>{fmtNum(budget)}</td>}
+        {(viewMode === 'both' || viewMode === 'actual') && <td className="num" style={{ ...numCellStyle, fontWeight: hasSubs ? 700 : 400 }}>{fmtNum(actual)}</td>}
         {viewMode === 'both' && <td className="num" style={numCellStyle}>{budget !== 0 ? pctStr((actual - budget) / Math.abs(budget)) : '—'}</td>}
         <td></td>
       </tr>
@@ -3339,12 +3368,16 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
     return (
       <>
         <tr className="subtotal-row"><td colSpan={totalCols} style={{ textAlign: 'left' }}>{title}</td></tr>
-        {items.map(item => (
-          <Fragment key={item.key}>
-            <ItemRow item={item} indent={item.subAccounts && item.subAccounts.length ? 0 : 0} />
-            {(item.subAccounts || []).map(sub => <ItemRow key={sub.key} item={sub} indent={1} />)}
-          </Fragment>
-        ))}
+        {items.map(item => {
+          const hasSubs = !!(item.subAccounts && item.subAccounts.length);
+          const expanded = !!expandedKeys[item.key];
+          return (
+            <Fragment key={item.key}>
+              <ItemRow item={item} indent={0} hasSubs={hasSubs} expanded={expanded} onToggle={() => toggleExpand(item.key)} />
+              {hasSubs && expanded && item.subAccounts.map(sub => <ItemRow key={sub.key} item={sub} indent={1} />)}
+            </Fragment>
+          );
+        })}
         <tr className="totalexp-row">
           <td style={{ textAlign: 'left' }}>Total {title}</td>
           {(viewMode === 'both' || viewMode === 'budget') && <td className="num" style={numCellStyle}>{fmtNum(sectionBudget)}</td>}
@@ -3455,6 +3488,84 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
   );
 }
 
+
+/* ---------------- Staff Usage / NRM (Non-Revenue Movement) ---------------- */
+function emptyNrmLog() {
+  return { id: uid('nrm'), vehicleId: '', staffName: '', dateOut: todayStr(), dateIn: '', mileageOut: '', mileageIn: '' };
+}
+function NrmLogPanel({ vehicles, nrmLogs, setNrmLogs, deletePin }) {
+  const [selectedId, setSelectedId] = useState(null);
+
+  function addEntry() {
+    const n = emptyNrmLog();
+    setNrmLogs([...nrmLogs, n]);
+    setSelectedId(n.id);
+  }
+  function updateEntry(id, patch) { setNrmLogs(nrmLogs.map(n => n.id === id ? { ...n, ...patch } : n)); }
+  function deleteEntry(n) {
+    if (!confirmDelete(n.staffName || 'this staff usage entry', deletePin)) return;
+    setNrmLogs(nrmLogs.filter(x => x.id !== n.id));
+    if (selectedId === n.id) setSelectedId(null);
+  }
+
+  const sorted = nrmLogs.slice().sort((a, b) => (b.dateOut || '').localeCompare(a.dateOut || ''));
+  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.plate} — ${v.name}` : '—'; };
+  const selected = nrmLogs.find(n => n.id === selectedId);
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Staff Usage — Non-Revenue Movement (NRM)</h3>
+          <button className="btn primary" onClick={addEntry}>+ New Entry</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Internal/staff vehicle usage that isn't a rental — e.g. staff pickups, internal errands. Tracked separately from Agreements and Garage Movement.</p>
+        {sorted.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>No staff usage entries yet.</p>
+        ) : (
+          <table>
+            <thead><tr><th style={{ width: 40 }}>S.No</th><th>Vehicle</th><th>Staff</th><th className="num">Date Out</th><th className="num">Date In</th><th className="num">Mileage Out</th><th className="num">Mileage In</th><th></th></tr></thead>
+            <tbody>
+              {sorted.map((n, i) => (
+                <tr key={n.id} style={{ background: n.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(n.id)}>
+                  <td>{i + 1}</td>
+                  <td>{vehicleName(n.vehicleId)}</td>
+                  <td>{n.staffName || '—'}</td>
+                  <td className="num">{n.dateOut ? fullDateLabel(n.dateOut) : '—'}</td>
+                  <td className="num">{n.dateIn ? fullDateLabel(n.dateIn) : <span className="badge neg">Still out</span>}</td>
+                  <td className="num">{n.mileageOut || '—'}</td>
+                  <td className="num">{n.mileageIn || '—'}</td>
+                  <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteEntry(n); }}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && (
+        <div className="panel">
+          <h3>Entry Details</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 200px' }}><label>Vehicle</label>
+              <select value={selected.vehicleId} onChange={e => updateEntry(selected.id, { vehicleId: e.target.value })}>
+                <option value="">Select vehicle…</option>
+                {vehicles.slice().sort((a, b) => (a.plate || '').localeCompare(b.plate || '')).map(v => <option key={v.id} value={v.id}>{v.plate} — {v.name}</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 200px' }}><label>Staff Name</label><input value={selected.staffName} onChange={e => updateEntry(selected.id, { staffName: e.target.value })} placeholder="Name (ID)" /></div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Date Out</label><input type="date" value={selected.dateOut} onChange={e => updateEntry(selected.id, { dateOut: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Date In</label><input type="date" value={selected.dateIn} onChange={e => updateEntry(selected.id, { dateIn: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Mileage Out</label><input type="number" value={selected.mileageOut} onChange={e => updateEntry(selected.id, { mileageOut: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Mileage In</label><input type="number" value={selected.mileageIn} onChange={e => updateEntry(selected.id, { mileageIn: e.target.value })} /></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ---------------- Occupancy Entry ---------------- */
 function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, remarks, setRemarks }) {
@@ -4911,6 +5022,18 @@ function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, dele
     return acc;
   }, { principalBalance: 0, interestBalance: 0, monthlyEMI: 0, overdueCount: 0, totalFinanced: 0, totalPaid: 0 });
   const loanPaidPct = loanTotals.totalFinanced ? loanTotals.totalPaid / loanTotals.totalFinanced : 0;
+  const isSingleLoanView = selectedLoanIds.length === 1;
+  const aggStats = displayLoans.reduce((acc, l) => {
+    const s = loanStats(l);
+    acc.totalPrincipal += s.totalPrincipal;
+    acc.paidPrincipal += s.paidPrincipal;
+    acc.totalInterest += s.totalInterest;
+    acc.paidInterest += s.paidInterest;
+    acc.totalAmount += s.totalAmount;
+    acc.paidAmount += s.paidAmount;
+    return acc;
+  }, { totalPrincipal: 0, paidPrincipal: 0, totalInterest: 0, paidInterest: 0, totalAmount: 0, paidAmount: 0 });
+  const aggPaidPct = aggStats.totalAmount ? aggStats.paidAmount / aggStats.totalAmount : 0;
 
   function addLoan() {
     const l = emptyLoan();
@@ -4989,11 +5112,45 @@ function PersonalFinancePanel({ loans, setLoans, cards, setCards, currency, dele
                       </tr>
                     );
                   })}
+                  <tr className="net-row">
+                    <td>Total{selectedLoanIds.length > 0 ? ` (${displayLoans.length} of ${loans.length} shown)` : ''}</td>
+                    <td></td>
+                    <td></td>
+                    <td className="num">{fmt(displayLoans.reduce((s, l) => s + loanAmount(l), 0), currency)}</td>
+                    <td className="num">{fmt(displayLoans.reduce((s, l) => s + loanStats(l).monthlyEMI, 0), currency)}</td>
+                    <td className="num">{pctStr(aggPaidPct)}</td>
+                    <td></td>
+                  </tr>
                 </tbody>
               </table>
             )}
           </div>
-          {selectedLoan && <FinancingDetail loan={selectedLoan} vehicles={[]} onChange={patch => updateLoan(selectedLoan.id, patch)} currency={currency} deletePin={deletePin} isPersonal />}
+          {isSingleLoanView && selectedLoan ? (
+            <FinancingDetail loan={selectedLoan} vehicles={[]} onChange={patch => updateLoan(selectedLoan.id, patch)} currency={currency} deletePin={deletePin} isPersonal />
+          ) : displayLoans.length > 0 ? (
+            <>
+              <div className="panel">
+                <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>
+                  {displayLoans.length} loans selected — showing combined figures below. Individual loan details, schedules, and the defer/paid tools are only shown when exactly one loan is selected in Report Selection above, to avoid mixing up separate loans.
+                </p>
+              </div>
+              <div className="grid-2">
+                <div className="panel" style={{ textAlign: 'center' }}>
+                  <h3>Combined Payment Progress</h3>
+                  <DonutGauge pct={aggPaidPct} color={aggPaidPct >= 1 ? '#3E9C6E' : '#2D6E8E'} />
+                  <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 8 }}>across {displayLoans.length} selected loan{displayLoans.length > 1 ? 's' : ''}</p>
+                </div>
+                <div className="panel">
+                  <h3>Combined Total vs Paid</h3>
+                  <GroupedBarChart data={[
+                    { label: 'Principal', total: aggStats.totalPrincipal, paid: aggStats.paidPrincipal },
+                    { label: 'Interest', total: aggStats.totalInterest, paid: aggStats.paidInterest },
+                    { label: 'Total', total: aggStats.totalAmount, paid: aggStats.paidAmount },
+                  ]} series={[{ key: 'total', label: 'Total', color: '#D9C8B9' }, { key: 'paid', label: 'Paid', color: '#2D6E8E' }]} height={160} />
+                </div>
+              </div>
+            </>
+          ) : null}
         </>
       )}
 
@@ -5404,7 +5561,7 @@ function agreementDaysCell(a) {
   return a.type === 'monthly' ? days % 30 : days;
 }
 
-function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin }) {
+function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin, garageMovements, setGarageMovements, nrmLogs, setNrmLogs }) {
   const emptyForm = emptyAgreement();
   const [form, setForm] = useState(emptyForm);
   const [view, setView] = useState('open'); // 'open' | 'closed' | 'void' | 'all' | 'add' | 'import'
@@ -5416,6 +5573,8 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   const [closeDaysInput, setCloseDaysInput] = useState('');
   const [closeRevenueInput, setCloseRevenueInput] = useState('');
   const [bulkText, setBulkText] = useState('');
+  const [movementsText, setMovementsText] = useState('');
+  const [movementsPreview, setMovementsPreview] = useState([]);
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState('raNumber'); // 'raNumber' | 'startDate' | 'plate' | 'customerName'
   const [sortDir, setSortDir] = useState('asc');
@@ -5479,7 +5638,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   }
 
   function reopenAgreement(a) {
-    if (!confirmDelete('reopening this closed agreement', deletePin)) return;
+    if (!confirmWithPin(`Reopen agreement ${a.raNumber || a.id}? It will move back to Open, and you can then Replace the vehicle or amend the close date as needed.`, deletePin)) return;
     setAgreements(agreements.map(x => x.id === a.id ? { ...x, status: 'open', closeDate: '' } : x));
   }
   function voidAgreement(a) {
@@ -5551,6 +5710,153 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     setReplacingId(null);
   }
 
+  // Movements Report import: a completely different source (vehicle-movement log, not the
+  // agreement export) that gives exact swap dates. Ref No is the shared key back to an
+  // existing agreement already in the system — this import never invents rate/customer data,
+  // it only detects that a Ref No had more than one distinct vehicle and, if so, splits the
+  // existing agreement into a proper replacement chain using each vehicle's real Date Time
+  // Out/In as its Start/Close date. The same sheet also carries Workshop (garage) movements
+  // and NRM (non-revenue / staff-usage) movements, routed to their own trackers below.
+  const [movementsGaragePreview, setMovementsGaragePreview] = useState([]);
+  const [movementsNrmPreview, setMovementsNrmPreview] = useState([]);
+  const [movementsUnknownCount, setMovementsUnknownCount] = useState(0);
+
+  function parseMovements() {
+    const lines = movementsText.split('\n').map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(line => {
+      const cols = (line.includes('\t') ? line.split('\t') : line.split(',')).map(c => c.trim());
+      // Matches: Movement No, Type, Ref No, Vehicle, Make and Model, Contact, Date Time Out,
+      // Date Time In, Mileage Out, Mileage In, Km Difference, Fuel Level Out, Fuel Level In,
+      // closed?, Marks Changed?, Creation Date Time, Created By.
+      const [movementNo, type, refNo, plate, , contact, dateOutRaw, dateInRaw, mileageOut, mileageIn] = cols;
+      return {
+        movementNo: (movementNo || '').trim(),
+        type: (type || '').trim(),
+        refNo: (refNo || '').trim(),
+        plate: (plate || '').trim(),
+        contact: (contact || '').trim(),
+        dateOutRaw, dateInRaw,
+        startDate: parseFlexibleDate(dateOutRaw),
+        closeDate: dateInRaw ? parseFlexibleDate(dateInRaw) : '',
+        mileageOut: (mileageOut || '').trim(),
+        mileageIn: (mileageIn || '').trim(),
+      };
+    }).filter(r => r.plate && (r.startDate || r.type));
+
+    // Skip a pasted header row if present (e.g. "Movement No" literally in the first column).
+    const rows = parsed.filter(r => r.movementNo.toLowerCase() !== 'movement no');
+
+    const agreementRows = rows.filter(r => /^agreement$/i.test(r.type));
+    const workshopRows = rows.filter(r => /^workshop/i.test(r.type));
+    const nrmRows = rows.filter(r => /^nrm/i.test(r.type));
+    const knownCount = agreementRows.length + workshopRows.length + nrmRows.length;
+    setMovementsUnknownCount(rows.length - knownCount);
+
+    // --- Agreement replacement-chain detection (unchanged logic) ---
+    const grouped = {};
+    agreementRows.forEach(r => { (grouped[r.refNo] = grouped[r.refNo] || []).push(r); });
+    const splits = Object.keys(grouped).map(refNo => {
+      const legs = grouped[refNo].slice().sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+      const distinctPlates = [...new Set(legs.map(l => l.plate.toLowerCase()))];
+      if (distinctPlates.length < 2) return null; // same vehicle throughout — nothing to split
+      const base = agreements.find(a => a.raNumber === refNo && !a.parentRaNumber);
+      const alreadySplit = agreements.some(a => a.parentRaNumber === refNo);
+      return { refNo, base: base || null, alreadySplit, legs };
+    }).filter(Boolean);
+    setMovementsPreview(splits);
+
+    // --- Workshop (garage) rows: Contact = Garage Name, parenthetical in Type = Purpose ---
+    const existingMovementNos = new Set(garageMovements.map(m => m.importedMovementNo).filter(Boolean));
+    const garagePreview = workshopRows
+      .filter(r => !existingMovementNos.has(r.movementNo))
+      .map(r => {
+        const purposeMatch = r.type.match(/\(([^)]+)\)/);
+        const vehicle = findVehicleByPlate(vehicles, r.plate);
+        return {
+          movementNo: r.movementNo, plate: r.plate, vehicleId: vehicle ? vehicle.id : '',
+          garageName: r.contact.replace(/\s*\(\d+\)\s*$/, ''),
+          purpose: purposeMatch ? purposeMatch[1] : 'Repair',
+          movementInDate: r.startDate, movementOutDate: r.closeDate,
+        };
+      });
+    setMovementsGaragePreview(garagePreview);
+
+    // --- NRM rows: Contact = staff name (e.g. "FARHAJ MOIN (76050)") ---
+    const existingNrmNos = new Set(nrmLogs.map(n => n.importedMovementNo).filter(Boolean));
+    const nrmPreview = nrmRows
+      .filter(r => !existingNrmNos.has(r.movementNo))
+      .map(r => {
+        const vehicle = findVehicleByPlate(vehicles, r.plate);
+        return {
+          movementNo: r.movementNo, plate: r.plate, vehicleId: vehicle ? vehicle.id : '',
+          staffName: r.contact, dateOut: r.startDate, dateIn: r.closeDate,
+          mileageOut: r.mileageOut, mileageIn: r.mileageIn,
+        };
+      });
+    setMovementsNrmPreview(nrmPreview);
+  }
+
+  function applyMovementsGarage() {
+    const newRecords = movementsGaragePreview.map(g => ({
+      id: uid('grg'),
+      movementNumber: generateMovementNumber(g.garageName, g.movementInDate),
+      vehicleId: g.vehicleId, garageName: g.garageName, purpose: g.purpose,
+      estimatedCost: '', remarks: `Imported from Movements Report (Movement No ${g.movementNo}).`,
+      movementInDate: g.movementInDate || todayStr(), movementOutDate: g.movementOutDate,
+      importedMovementNo: g.movementNo,
+    }));
+    setGarageMovements([...garageMovements, ...newRecords]);
+    setMovementsGaragePreview([]);
+  }
+
+  function applyMovementsNrm() {
+    const newRecords = movementsNrmPreview.map(n => ({
+      id: uid('nrm'), vehicleId: n.vehicleId, staffName: n.staffName,
+      dateOut: n.dateOut || todayStr(), dateIn: n.dateIn,
+      mileageOut: n.mileageOut, mileageIn: n.mileageIn,
+      importedMovementNo: n.movementNo,
+    }));
+    setNrmLogs([...nrmLogs, ...newRecords]);
+    setMovementsNrmPreview([]);
+  }
+
+  function applyMovementSplits() {
+    let next = [...agreements];
+    let applied = 0, skipped = 0;
+    movementsPreview.forEach(({ refNo, base, alreadySplit, legs }) => {
+      if (!base || alreadySplit) { skipped++; return; }
+      const baseIdx = next.findIndex(a => a.id === base.id);
+      const firstLeg = legs[0];
+      const firstVehicle = findVehicleByPlate(vehicles, firstLeg.plate);
+      next[baseIdx] = {
+        ...next[baseIdx],
+        plate: firstLeg.plate, vehicleId: firstVehicle ? firstVehicle.id : '',
+        startDate: firstLeg.startDate || next[baseIdx].startDate,
+        closeDate: firstLeg.closeDate || '',
+        status: 'replaced',
+      };
+      legs.slice(1).forEach(leg => {
+        const suffix = nextReplacementSuffix(refNo, next);
+        const v = findVehicleByPlate(vehicles, leg.plate);
+        const isLast = leg === legs[legs.length - 1];
+        next.push({
+          id: uid('agr'), raNumber: `${refNo}-${suffix}`, parentRaNumber: refNo,
+          plate: leg.plate, vehicleId: v ? v.id : '',
+          customerName: base.customerName, type: base.type,
+          startDate: leg.startDate || todayStr(), closeDate: leg.closeDate || '',
+          status: isLast && !leg.closeDate ? 'open' : 'closed',
+          rate: base.rate, daysOverride: '', revenueOverride: '',
+          replacementPlate: '', notes: `Vehicle swap imported from Movements Report (Ref ${refNo}).`,
+        });
+      });
+      applied++;
+    });
+    setAgreements(next);
+    setMovementsPreview([]);
+    setMovementsText('');
+    window.alert(`Applied ${applied} vehicle-swap split(s). ${skipped} skipped (Ref# not found in your agreements, or already split — check Notes on existing legs).`);
+  }
+
   function parseBulk() {
     const lines = bulkText.split('\n').map(l => l.trim()).filter(Boolean);
     const queue = lines.map(line => {
@@ -5559,7 +5865,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       // Customer, Customer Code, Contact No, Driver, Driver Code, Driver Nationality,
       // Start Date, End Date, Rental Days, Additional Notes, Notes, PO No, Status, Rate,
       // Taxable Amount, VAT, Total Amount.
-      const [raNumber, type, plate, , customerName, , , , , , startDateRaw, endDateRaw, , , , , status, rateRaw] = cols;
+      const [raNumber, type, plate, permanentPlateRaw, customerName, , , , , , startDateRaw, endDateRaw, , , , , status, rateRaw] = cols;
       if (!plate) return null;
       const isOpen = (status || '').trim().toLowerCase() === 'open';
       // Rental Days, Taxable Amount, VAT, and Total Amount are all ignored on purpose: Days
@@ -5567,6 +5873,14 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       // what income is calculated from, never the VAT-inclusive Total.
       const rate = (rateRaw || '').replace(/\/\s*(Month|Day)/i, '').trim();
       const vehicle = findVehicleByPlate(vehicles, plate);
+      // "Permanent Vehicle" is the originally-contracted car; "Vehicle" is whichever car is
+      // actually on this agreement now. When they differ, the customer's car was swapped
+      // mid-contract at some point your export doesn't give us an exact date for — we can't
+      // safely auto-split occupancy between the two cars, so this gets flagged for you to
+      // review and fix manually (Reopen → Replace Vehicle → Close) rather than silently
+      // crediting the whole period to just one of the two vehicles.
+      const permanentPlate = (permanentPlateRaw || '').trim();
+      const replacementDetected = !!(permanentPlate && permanentPlate.toLowerCase() !== plate.trim().toLowerCase());
       return {
         raNumber: raNumber || '', plate, vehicleId: vehicle ? vehicle.id : '', customerName: customerName || '',
         type: (type || '').toLowerCase().includes('month') ? 'monthly' : 'daily',
@@ -5577,6 +5891,9 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         closeDate: !isOpen ? parseFlexibleDate(endDateRaw) : '',
         status: isOpen ? 'open' : 'closed',
         rate: rate || '0',
+        permanentPlate: replacementDetected ? permanentPlate : '',
+        replacementDetected,
+        notes: replacementDetected ? `⚠ Vehicle replaced during contract — Permanent Vehicle: ${permanentPlate}, Current Vehicle: ${plate}. Occupancy for this RA# is currently attributed entirely to ${plate}; split manually via Reopen → Replace Vehicle → Close if the days should be divided between both cars.` : '',
       };
     }).filter(Boolean);
     if (queue.length === 0) { window.alert('No valid rows found — make sure each row has at least a Vehicle Plate.'); return; }
@@ -5723,6 +6040,12 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
               <span style={{ fontSize: 12, color: 'var(--muted)' }}>{reviewCountsRef.current.added} added · {reviewCountsRef.current.updated} updated · {reviewCountsRef.current.skipped} skipped</span>
             </div>
             <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -4 }}>Check the date, status, and rate before confirming — this fixes what feeds the revenue and occupancy period for this agreement. Nothing is saved until you confirm this row.</p>
+            {reviewDraft.replacementDetected && (
+              <div style={{ background: '#FDEDEC', border: '1px solid var(--red)', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+                <p style={{ fontSize: 12, color: 'var(--red)', margin: 0, fontWeight: 600 }}>⚠ Vehicle replaced during this contract</p>
+                <p style={{ fontSize: 12, color: 'var(--ink)', margin: '4px 0 0' }}>Permanent Vehicle: <b>{reviewDraft.permanentPlate}</b> · Current Vehicle: <b>{reviewDraft.plate}</b>. The export doesn't give an exact swap date, so this will import under {reviewDraft.plate} for the whole period. After importing, fix it via Reopen → Replace Vehicle → Close if the occupancy days should be split between both cars.</p>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <div className="field" style={{ flex: '1 1 100px' }}><label>RA#</label><input value={reviewDraft.raNumber} onChange={e => setReviewDraft({ ...reviewDraft, raNumber: e.target.value })} /></div>
               <div className="field" style={{ flex: '1 1 140px' }}><label>Customer</label><input value={reviewDraft.customerName} onChange={e => setReviewDraft({ ...reviewDraft, customerName: e.target.value })} /></div>
@@ -5775,6 +6098,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
           <div className={`chip ${view === 'all' ? 'selected' : ''}`} onClick={() => setView('all')}>All ({agreements.length})</div>
           <div className={`chip ${view === 'add' ? 'selected' : ''}`} onClick={() => setView('add')}>+ Add Agreement</div>
           <div className={`chip ${view === 'import' ? 'selected' : ''}`} onClick={() => setView('import')}>Import / Paste</div>
+          <div className={`chip ${view === 'import-movements' ? 'selected' : ''}`} onClick={() => setView('import-movements')}>Import Movements Report</div>
         </div>
         {(view === 'open' || view === 'closed' || view === 'void' || view === 'all') && (
           <div style={{ marginTop: 10 }}>
@@ -5841,11 +6165,94 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       {view === 'import' && (
         <div className="panel">
           <h3>Import / Paste Agreements</h3>
-          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Paste rows directly from your agreement report — same column layout: <code>Agreement No, Type, Vehicle, Permanent Vehicle, Customer, Customer Code, Contact No, Driver, Driver Code, Driver Nationality, Start Date, End Date, Rental Days, Additional Notes, Notes, PO No, Status, Rate, Taxable Amount, VAT, Total Amount</code>. Rental Days, Taxable Amount, VAT, and Total Amount are all ignored on purpose — Days is always computed fresh, and Rate (not the VAT-inclusive Total) is what income is calculated from. Plates not in your fleet are auto-flagged as Sub-Lease. Nothing is saved automatically — after clicking Import, you'll review each row one at a time (Start Date, Status, Close Date, and Rate) before it's confirmed, so you can catch anything wrong before it affects revenue or occupancy.</p>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Paste rows directly from your agreement report — same column layout: <code>Agreement No, Type, Vehicle, Permanent Vehicle, Customer, Customer Code, Contact No, Driver, Driver Code, Driver Nationality, Start Date, End Date, Rental Days, Additional Notes, Notes, PO No, Status, Rate, Taxable Amount, VAT, Total Amount</code>. Rental Days, Taxable Amount, VAT, and Total Amount are all ignored on purpose — Days is always computed fresh, and Rate (not the VAT-inclusive Total) is what income is calculated from. Plates not in your fleet are auto-flagged as Sub-Lease. If Permanent Vehicle differs from Vehicle, that row is flagged during review as a mid-contract vehicle replacement, since the export doesn't give an exact swap date to split occupancy automatically. Nothing is saved automatically — after clicking Import, you'll review each row one at a time (Start Date, Status, Close Date, and Rate) before it's confirmed, so you can catch anything wrong before it affects revenue or occupancy.</p>
           <textarea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={6}
             style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
             placeholder={"Paste tab-separated rows here, straight from your export…"} />
           <button className="btn primary" style={{ marginTop: 8 }} onClick={parseBulk}>Start Review ▶</button>
+        </div>
+      )}
+
+      {view === 'import-movements' && (
+        <div className="panel">
+          <h3>Import Movements Report</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>
+            Paste rows from your Movements Report — column layout: <code>Movement No, Type, Ref No, Vehicle, Make and Model, Contact, Date Time Out, Date Time In, Mileage Out, Mileage In, Km Difference, Fuel Level Out, Fuel Level In, closed?, Marks Changed?, Creation Date Time, Created By</code>.
+            The Type column routes each row: <b>Agreement</b> rows detect Ref#s with more than one vehicle and split the <b>existing</b> agreement (matched by RA# = Ref No) into a proper replacement chain using each vehicle's real Date Time Out/In — this never invents rate/customer data, and Ref#s not already in your Agreements (or already split) are skipped. <b>Workshop (...)</b> rows go to Garage Movement (Contact = Garage Name, the word in parentheses = Purpose). <b>NRM (...)</b> rows go to the Staff Usage log (Contact = staff name). Nothing saves until you click each section's Apply button.
+          </p>
+          <textarea value={movementsText} onChange={e => setMovementsText(e.target.value)} rows={6}
+            style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 6, padding: 8, fontSize: 12.5, boxSizing: 'border-box', fontFamily: 'Roboto Mono, monospace' }}
+            placeholder={"Paste tab-separated rows here, straight from your Movements Report…"} />
+          <button className="btn primary" style={{ marginTop: 8 }} onClick={parseMovements}>Analyze Rows ▶</button>
+          {movementsUnknownCount > 0 && <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>{movementsUnknownCount} row(s) had a Type that wasn't Agreement / Workshop / NRM and were ignored.</p>}
+
+          {movementsPreview.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3>Agreement Replacement Chains ({movementsPreview.length})</h3>
+              <table>
+                <thead><tr><th>Ref# (RA#)</th><th>Status</th><th>Vehicles &amp; Dates</th></tr></thead>
+                <tbody>
+                  {movementsPreview.map(({ refNo, base, alreadySplit, legs }) => (
+                    <tr key={refNo}>
+                      <td>{refNo}</td>
+                      <td>
+                        {!base ? <span className="badge neg">Ref# not found — skipped</span>
+                          : alreadySplit ? <span className="badge neg">Already split — skipped</span>
+                          : <span className="badge pos">Will split into {legs.length} legs</span>}
+                      </td>
+                      <td>
+                        {legs.map((l, i) => (
+                          <div key={i} style={{ fontSize: 12 }}>{l.plate}: {l.startDate || '—'} → {l.closeDate || 'ongoing'}</div>
+                        ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementSplits}>Apply All Valid Splits</button>
+            </div>
+          )}
+
+          {movementsGaragePreview.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3>Garage Movements to Add ({movementsGaragePreview.length})</h3>
+              <table>
+                <thead><tr><th>Vehicle</th><th>Garage</th><th>Purpose</th><th>In Date</th><th>Out Date</th></tr></thead>
+                <tbody>
+                  {movementsGaragePreview.map((g, i) => (
+                    <tr key={i}>
+                      <td>{g.plate}{!g.vehicleId && <span className="badge neg" style={{ marginLeft: 6 }}>Not in fleet</span>}</td>
+                      <td>{g.garageName}</td>
+                      <td>{g.purpose}</td>
+                      <td>{g.movementInDate ? fullDateLabel(g.movementInDate) : '—'}</td>
+                      <td>{g.movementOutDate ? fullDateLabel(g.movementOutDate) : <span style={{ color: 'var(--muted)' }}>Still in garage</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementsGarage}>Add {movementsGaragePreview.length} Garage Movement{movementsGaragePreview.length === 1 ? '' : 's'}</button>
+            </div>
+          )}
+
+          {movementsNrmPreview.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3>Staff Usage (NRM) Entries to Add ({movementsNrmPreview.length})</h3>
+              <table>
+                <thead><tr><th>Vehicle</th><th>Staff</th><th>Date Out</th><th>Date In</th></tr></thead>
+                <tbody>
+                  {movementsNrmPreview.map((n, i) => (
+                    <tr key={i}>
+                      <td>{n.plate}{!n.vehicleId && <span className="badge neg" style={{ marginLeft: 6 }}>Not in fleet</span>}</td>
+                      <td>{n.staffName}</td>
+                      <td>{n.dateOut ? fullDateLabel(n.dateOut) : '—'}</td>
+                      <td>{n.dateIn ? fullDateLabel(n.dateIn) : <span style={{ color: 'var(--muted)' }}>Still out</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementsNrm}>Add {movementsNrmPreview.length} Staff Usage Entr{movementsNrmPreview.length === 1 ? 'y' : 'ies'}</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -5901,7 +6308,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   <td className="num">{fmtNum(a.rate)}{a.type === 'monthly' ? '/mo' : '/day'}</td>
                   <td className="num">{fmt(agreementTotalRevenue(a), currency)}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button className="icon-btn" onClick={() => startEdit(a)} title="Edit">✎</button>{' '}
+                    <button className="icon-btn" onClick={() => { startEdit(a); setView('all'); }} title="Edit">✎</button>{' '}
                     <button className="icon-btn" title="Reopen" onClick={() => reopenAgreement(a)}>↺</button>{' '}
                     <button className="icon-btn" onClick={() => deleteAgreement(a)}>✕</button>
                   </td>
@@ -6706,6 +7113,11 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
   const availableCount = availableVehicles.length;
   const ownedTotal = ownedVehicles.length;
   const idleList = availableVehicles.map(f => ({ vehicle: f.vehicle, idle: idleDaysSince(f.vehicle, agreements, occupancy) })).sort((a, b) => (b.idle ? b.idle.days : -1) - (a.idle ? a.idle.days : -1));
+  const garageList = fleetStatuses.filter(f => f.status === 'garage').map(f => ({
+    vehicle: f.vehicle,
+    days: f.movement && f.movement.movementInDate ? Math.round((new Date(todayStr()) - new Date(f.movement.movementInDate)) / 86400000) : null,
+    inDate: f.movement ? f.movement.movementInDate : null,
+  })).sort((a, b) => (b.days || 0) - (a.days || 0));
 
   const WIDGET_LABELS = { netProfit: 'Net Profit / Loss', totalRevenue: 'Total Revenue', occupancy: 'Fleet Occupancy', fleetStatus: 'Fleet Status (Available/Rented/In Garage)', topModels: 'Top Performing Models', budgetVsActual: 'Budget vs Actual Chart', alerts: 'Alerts (Payment Due, etc.)' };
 
@@ -6783,6 +7195,7 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
         {widgets.fleetStatus && ownedTotal > 0 && (
           <div className="panel" style={{ flex: '1 1 320px' }}>
             <h3>Fleet Status — Owned Fleet ({ownedTotal})</h3>
+            <p style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--steel)', marginTop: -4, marginBottom: 8 }}>Current Fleet Status – As of – {ddmmyyyy(todayStr())}</p>
             <PieChart size={130} slices={[
               { label: 'Rented', value: rentedCount, color: '#2D6E8E' },
               { label: 'Available', value: availableCount, color: '#3E9C6E' },
@@ -6795,15 +7208,38 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
       {widgets.fleetStatus && ownedTotal > 0 && idleList.length > 0 && (
         <div className="panel">
           <h3>Idle Vehicles — Days Since Last Rental</h3>
+          <p style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--steel)', marginTop: -4, marginBottom: 4 }}>Current Fleet Status – As of – {ddmmyyyy(todayStr())}</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -2 }}>Independent of the Report Period selected above; for past months, use the Occupancy Report instead.</p>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Based on the last closed Agreement where available; for vehicles tracked only through Occupancy Entry, "Est." shows an approximate date (end of the last month with recorded occupancy).</p>
           <table>
-            <thead><tr><th>Vehicle</th><th className="num">Idle Since</th><th className="num">Idle Days</th></tr></thead>
+            <thead><tr><th style={{ width: 40 }}>S.No</th><th>Vehicle</th><th className="num">Idle Since</th><th className="num">Idle Days</th></tr></thead>
             <tbody>
-              {idleList.slice(0, 8).map(({ vehicle, idle }) => (
+              {idleList.map(({ vehicle, idle }, i) => (
                 <tr key={vehicle.id}>
+                  <td>{i + 1}</td>
                   <td>{vehicle.name} ({vehicle.plate})</td>
                   <td className="num">{idle ? (idle.source === 'occupancy' ? 'Est. ' : '') + fullDateLabel(idle.lastCloseDate) : '—'}</td>
                   <td className="num">{idle ? <span className={`badge ${idle.days > 14 ? 'neg' : 'pos'}`}>{idle.days} day{idle.days === 1 ? '' : 's'}</span> : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {widgets.fleetStatus && garageList.length > 0 && (
+        <div className="panel">
+          <h3>In Garage — Days Since Movement In</h3>
+          <p style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--steel)', marginTop: -4, marginBottom: 8 }}>Current Fleet Status – As of – {ddmmyyyy(todayStr())}</p>
+          <table>
+            <thead><tr><th style={{ width: 40 }}>S.No</th><th>Vehicle</th><th className="num">In Garage Since</th><th className="num">Days In Garage</th></tr></thead>
+            <tbody>
+              {garageList.map(({ vehicle, days, inDate }, i) => (
+                <tr key={vehicle.id}>
+                  <td>{i + 1}</td>
+                  <td>{vehicle.name} ({vehicle.plate})</td>
+                  <td className="num">{inDate ? fullDateLabel(inDate) : '—'}</td>
+                  <td className="num"><span className="badge neg">In Garage{days !== null ? ` — ${days} day${days === 1 ? '' : 's'}` : ''}</span></td>
                 </tr>
               ))}
             </tbody>
