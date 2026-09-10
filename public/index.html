@@ -23,6 +23,12 @@
   .navbtn { display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:none; border:none; color:rgba(255,255,255,0.72); padding:9px 10px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; margin-bottom:2px; }
   .nav-group-label { color:rgba(255,255,255,0.4); font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:14px 10px 4px; }
   .nav-group-label:first-child { padding-top:4px; }
+  .nav-group-header { display:flex; align-items:center; justify-content:space-between; width:100%; background:none; border:none; color:rgba(255,255,255,0.45); font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; padding:14px 10px 6px; cursor:pointer; }
+  .nav-group-header:hover { color:rgba(255,255,255,0.7); }
+  .nav-group-header .chevron { font-size:9px; transition: transform 0.15s ease; }
+  .nav-group-box { background:rgba(255,255,255,0.045); border-radius:9px; padding:4px; margin:0 0 4px; overflow:hidden; max-height:1000px; transition: max-height 0.2s ease, opacity 0.15s ease, margin 0.2s ease; }
+  .nav-group-box.collapsed { max-height:0; padding:0 4px; opacity:0; margin:0; }
+  .nav-group-box .navbtn { padding-left:16px; }
   .navbtn:hover { background:rgba(255,255,255,0.06); color:#fff; }
   .navbtn.active { background:var(--steel); color:#fff; }
   .sidebar-footer { margin-top:auto; padding-top:12px; border-top:1px solid rgba(255,255,255,0.12); font-size:11px; color:rgba(255,255,255,0.5); }
@@ -175,7 +181,7 @@ const ADMIN_ONLY_TABS = ['settings'];
 const ADMIN_MANAGER_TABS = ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'insurance', 'budget-planning'];
 const VIEWER_HIDDEN_TABS = [...ADMIN_ONLY_TABS, ...ADMIN_MANAGER_TABS, 'financing', 'feasibility'];
 function TAB_GROUPS_FOR_ROLE(role) {
-  const all = ['dashboard', 'quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'nrm-log', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'personal-finance', 'settings'];
+  const all = ['dashboard', 'quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'nrm-log', 'employees', 'investors-fleet', 'pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'insurance', 'budget-planning', 'vehicles', 'chart-of-accounts', 'import', 'notes', 'subscriptions', 'personal-finance', 'settings'];
   if (role === 'admin') return all;
   if (role === 'manager') return all.filter(t => !ADMIN_ONLY_TABS.includes(t) && t !== 'financing' && t !== 'feasibility' && t !== 'personal-finance');
   return all.filter(t => !VIEWER_HIDDEN_TABS.includes(t) && t !== 'personal-finance');
@@ -231,10 +237,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-130';
+const APP_VERSION = 'Version 2026-141';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "New: Import Movements Report (Agreements → Import Movements Report). Reads your vehicle-movement log and routes each row by Type: Agreement rows detect Ref#s with more than one vehicle and split the existing agreement into a proper replacement chain using exact Date Time Out/In; Workshop (...) rows go to Garage Movement; NRM (...) rows go to a brand-new Staff Usage tracker (new tab). Each category previews separately before you apply it — nothing saves automatically.";
+const APP_WHATS_NEW = "Total rows added to Sub-Lease Vehicles, Fleet Data Report, and Vehicle Loans tables — all three were missing them. New: Subscriptions & Domains tracker (under Administration) for domain names, software licenses, and other recurring renewals — S.No, Particulars, Domain Name/Subscription, Expiry Date, Amount — with its own 7-day-heads-up reminder banner, same pattern as vehicle/staff insurance.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -319,10 +325,511 @@ function insuranceMonthlyTotal(period, insurancePolicies) {
 
 // ---------------- Agreement-based Occupancy/Income system ----------------
 
+/* ---------------- Employees ---------------- */
+function EmployeePanel({ employees, setEmployees, staffInsurancePolicies, setStaffInsurancePolicies, airTickets, setAirTickets, currency, deletePin, reportSelectedIds, setReportSelectedIds }) {
+  const [tab, setTab] = useState('employees');
+  const [selectedEmpId, setSelectedEmpId] = useState(null);
+
+  function addEmployee() { const e = emptyEmployee(); setEmployees([...employees, e]); setSelectedEmpId(e.id); }
+  function updateEmployee(id, patch) { setEmployees(employees.map(e => e.id === id ? { ...e, ...patch } : e)); }
+  function deleteEmployee(e) {
+    if (!confirmDelete(e.name || 'this employee', deletePin)) return;
+    setEmployees(employees.filter(x => x.id !== e.id));
+    setStaffInsurancePolicies(staffInsurancePolicies.filter(p => p.employeeId !== e.id));
+    setAirTickets(airTickets.filter(t => t.employeeId !== e.id));
+    if (selectedEmpId === e.id) setSelectedEmpId(null);
+  }
+  const empName = (id) => { const e = employees.find(x => x.id === id); return e ? e.name : '—'; };
+  const selectedEmp = employees.find(e => e.id === selectedEmpId);
+
+  return (
+    <div>
+      <div className="panel">
+        <h3>Employees</h3>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className={`chip ${tab === 'employees' ? 'selected' : ''}`} onClick={() => setTab('employees')}>Employee List</div>
+          <div className={`chip ${tab === 'gratuity' ? 'selected' : ''}`} onClick={() => setTab('gratuity')}>Gratuity / EOS</div>
+          <div className={`chip ${tab === 'insurance' ? 'selected' : ''}`} onClick={() => setTab('insurance')}>Staff Insurance</div>
+          <div className={`chip ${tab === 'tickets' ? 'selected' : ''}`} onClick={() => setTab('tickets')}>Air Tickets</div>
+          <div className={`chip ${tab === 'report' ? 'selected' : ''}`} onClick={() => setTab('report')}>Employee Report</div>
+        </div>
+      </div>
+
+      {tab === 'employees' && (
+        <>
+          <div className="panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>Employee List</h3>
+              <button className="btn primary" onClick={addEmployee}>+ Add Employee</button>
+            </div>
+            {employees.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No employees added yet.</p> : (
+              <table>
+                <thead><tr><th>Name</th><th>Designation</th><th>Join Date</th><th className="num">Basic Salary</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                  {employees.map(e => (
+                    <tr key={e.id} style={{ background: e.id === selectedEmpId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedEmpId(e.id)}>
+                      <td>{e.name || '(unnamed)'}</td>
+                      <td>{e.designation || '—'}</td>
+                      <td>{e.joinDate ? fullDateLabel(e.joinDate) : '—'}</td>
+                      <td className="num">{fmt(num(e.basicSalary), currency)}</td>
+                      <td>{e.status === 'active' ? <span className="badge pos">Active</span> : <span className="badge neg">Resigned</span>}</td>
+                      <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={ev => { ev.stopPropagation(); deleteEmployee(e); }}>✕</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          {selectedEmp && (
+            <div className="panel">
+              <h3>Employee Details</h3>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div className="field" style={{ flex: '1 1 200px' }}><label>Name</label><input value={selectedEmp.name} onChange={e => updateEmployee(selectedEmp.id, { name: e.target.value })} /></div>
+                <div className="field" style={{ flex: '1 1 160px' }}><label>Designation</label><input value={selectedEmp.designation} onChange={e => updateEmployee(selectedEmp.id, { designation: e.target.value })} /></div>
+                <div className="field" style={{ flex: '1 1 140px' }}><label>Status</label>
+                  <select value={selectedEmp.status} onChange={e => updateEmployee(selectedEmp.id, { status: e.target.value })}>
+                    <option value="active">Active</option>
+                    <option value="resigned">Resigned</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+                <div className="field" style={{ flex: '1 1 160px' }}><label>Join Date</label><input type="date" value={selectedEmp.joinDate} onChange={e => updateEmployee(selectedEmp.id, { joinDate: e.target.value })} /></div>
+                <div className="field" style={{ flex: '1 1 160px' }}><label>Basic Salary ({currency}/month)</label><input type="number" value={selectedEmp.basicSalary} onChange={e => updateEmployee(selectedEmp.id, { basicSalary: e.target.value })} /></div>
+                {selectedEmp.status === 'resigned' && (
+                  <div className="field" style={{ flex: '1 1 160px' }}><label>Exit Date</label><input type="date" value={selectedEmp.exitDate} onChange={e => updateEmployee(selectedEmp.id, { exitDate: e.target.value })} /></div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'gratuity' && (
+        <div className="panel">
+          <h3>Gratuity / End of Service</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Standard UAE unlimited-contract formula — 21 days' basic pay per year of service for the first 5 years, 30 days/year beyond that. A standard estimate, not legal advice.</p>
+          {employees.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add employees first.</p> : (
+            <table>
+              <thead><tr><th>Name</th><th className="num">Years of Service</th><th className="num">Entitlement Days</th><th className="num">Accrued Gratuity</th></tr></thead>
+              <tbody>
+                {employees.map(e => {
+                  const g = gratuityStats(e);
+                  return (
+                    <tr key={e.id}>
+                      <td>{e.name || '(unnamed)'}</td>
+                      <td className="num">{g.yearsOfService.toFixed(1)}</td>
+                      <td className="num">{g.entitlementDays.toFixed(1)}</td>
+                      <td className="num">{fmt(g.accrued, currency)}</td>
+                    </tr>
+                  );
+                })}
+                <tr className="net-row">
+                  <td>Total Accrued Gratuity</td><td></td><td></td>
+                  <td className="num">{fmt(employees.reduce((s, e) => s + gratuityStats(e).accrued, 0), currency)}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === 'insurance' && (
+        <StaffInsurancePanel employees={employees} staffInsurancePolicies={staffInsurancePolicies} setStaffInsurancePolicies={setStaffInsurancePolicies} currency={currency} deletePin={deletePin} empName={empName} />
+      )}
+
+      {tab === 'tickets' && (
+        <AirTicketPanel employees={employees} airTickets={airTickets} setAirTickets={setAirTickets} currency={currency} deletePin={deletePin} empName={empName} />
+      )}
+
+      {tab === 'report' && (
+        <EmployeeReportPanel employees={employees} airTickets={airTickets} currency={currency} selectedIds={reportSelectedIds} setSelectedIds={setReportSelectedIds} />
+      )}
+    </div>
+  );
+}
+
+function StaffInsurancePanel({ employees, staffInsurancePolicies, setStaffInsurancePolicies, currency, deletePin, empName }) {
+  const [selectedId, setSelectedId] = useState(null);
+  function addPolicy() { const p = emptyStaffInsurancePolicy(); setStaffInsurancePolicies([...staffInsurancePolicies, p]); setSelectedId(p.id); }
+  function updatePolicy(id, patch) { setStaffInsurancePolicies(staffInsurancePolicies.map(p => p.id === id ? { ...p, ...patch } : p)); }
+  function deletePolicy(p) {
+    if (!confirmDelete(p.policyNumber || 'this policy', deletePin)) return;
+    setStaffInsurancePolicies(staffInsurancePolicies.filter(x => x.id !== p.id));
+    if (selectedId === p.id) setSelectedId(null);
+  }
+  const selected = staffInsurancePolicies.find(p => p.id === selectedId);
+  const daysLeft = (endDate) => endDate ? Math.round((new Date(endDate) - new Date(todayStr())) / 86400000) : null;
+
+  return (
+    <>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Staff Insurance</h3>
+          <button className="btn primary" onClick={addPolicy}>+ Add Policy</button>
+        </div>
+        {staffInsurancePolicies.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No staff insurance policies added yet.</p> : (
+          <table>
+            <thead><tr><th>Employee</th><th>Policy #</th><th>Insurer</th><th className="num">Premium</th><th>Expiry</th><th></th></tr></thead>
+            <tbody>
+              {staffInsurancePolicies.map(p => {
+                const d = daysLeft(p.endDate);
+                return (
+                  <tr key={p.id} style={{ background: p.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(p.id)}>
+                    <td>{empName(p.employeeId)}</td>
+                    <td>{p.policyNumber || '—'}</td>
+                    <td>{p.insurer || '—'}</td>
+                    <td className="num">{fmt(num(p.premium), currency)}</td>
+                    <td>{p.endDate ? <span className={`badge ${d !== null && d <= 7 ? 'neg' : 'pos'}`}>{fullDateLabel(p.endDate)}</span> : '—'}</td>
+                    <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deletePolicy(p); }}>✕</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {selected && (
+        <div className="panel">
+          <h3>Policy Details</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 180px' }}><label>Employee</label>
+              <select value={selected.employeeId} onChange={e => updatePolicy(selected.id, { employeeId: e.target.value })}>
+                <option value="">Select employee…</option>
+                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Policy Number</label><input value={selected.policyNumber} onChange={e => updatePolicy(selected.id, { policyNumber: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Insurer</label><input value={selected.insurer} onChange={e => updatePolicy(selected.id, { insurer: e.target.value })} /></div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Premium ({currency})</label><input type="number" value={selected.premium} onChange={e => updatePolicy(selected.id, { premium: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Start Date</label><input type="date" value={selected.startDate} onChange={e => updatePolicy(selected.id, { startDate: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Expiry Date</label><input type="date" value={selected.endDate} onChange={e => updatePolicy(selected.id, { endDate: e.target.value })} /></div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function AirTicketPanel({ employees, airTickets, setAirTickets, currency, deletePin, empName }) {
+  const [selectedId, setSelectedId] = useState(null);
+  function addTicket() { const t = emptyAirTicket(); setAirTickets([...airTickets, t]); setSelectedId(t.id); }
+  function updateTicket(id, patch) { setAirTickets(airTickets.map(t => t.id === id ? { ...t, ...patch } : t)); }
+  function deleteTicket(t) {
+    if (!confirmDelete('this air ticket record', deletePin)) return;
+    setAirTickets(airTickets.filter(x => x.id !== t.id));
+    if (selectedId === t.id) setSelectedId(null);
+  }
+  const selected = airTickets.find(t => t.id === selectedId);
+  const sorted = airTickets.slice().sort((a, b) => num(b.yearPaid) - num(a.yearPaid));
+
+  return (
+    <>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Air Ticket Payments</h3>
+          <button className="btn primary" onClick={addTicket}>+ Add Payment</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Each employee's Next Due Year is calculated individually as their last paid year + 2 — this is a list/report only, no reminder banner.</p>
+        {airTickets.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No air ticket payments recorded yet.</p> : (
+          <table>
+            <thead><tr><th>Employee</th><th className="num">Year Paid</th><th className="num">Amount Paid</th><th>Notes</th><th></th></tr></thead>
+            <tbody>
+              {sorted.map(t => (
+                <tr key={t.id} style={{ background: t.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(t.id)}>
+                  <td>{empName(t.employeeId)}</td>
+                  <td className="num">{t.yearPaid || '—'}</td>
+                  <td className="num">{fmt(num(t.amountPaid), currency)}</td>
+                  <td>{t.notes || '—'}</td>
+                  <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteTicket(t); }}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="panel">
+        <h3>Next Due Year — Per Employee</h3>
+        {employees.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>Add employees first.</p> : (
+          <table>
+            <thead><tr><th>Employee</th><th className="num">Last Paid Year</th><th className="num">Last Amount Paid</th><th className="num">Next Due Year</th></tr></thead>
+            <tbody>
+              {employees.map(e => {
+                const history = airTickets.filter(t => t.employeeId === e.id).sort((a, b) => num(b.yearPaid) - num(a.yearPaid));
+                const last = history[0];
+                const nextDue = nextTicketDueYear(e.id, airTickets);
+                return (
+                  <tr key={e.id}>
+                    <td>{e.name || '(unnamed)'}</td>
+                    <td className="num">{last ? last.yearPaid : '—'}</td>
+                    <td className="num">{last ? fmt(num(last.amountPaid), currency) : '—'}</td>
+                    <td className="num">{nextDue ? <span className={`badge ${nextDue <= new Date().getFullYear() ? 'neg' : 'pos'}`}>{nextDue}</span> : <span style={{ color: 'var(--muted)' }}>No history</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && (
+        <div className="panel">
+          <h3>Payment Details</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 180px' }}><label>Employee</label>
+              <select value={selected.employeeId} onChange={e => updateTicket(selected.id, { employeeId: e.target.value })}>
+                <option value="">Select employee…</option>
+                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 120px' }}><label>Year Paid</label><input type="number" value={selected.yearPaid} onChange={e => updateTicket(selected.id, { yearPaid: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Amount Paid ({currency})</label><input type="number" value={selected.amountPaid} onChange={e => updateTicket(selected.id, { amountPaid: e.target.value })} /></div>
+          </div>
+          <div className="field" style={{ marginTop: 10 }}><label>Notes</label><input value={selected.notes} onChange={e => updateTicket(selected.id, { notes: e.target.value })} style={{ width: '100%' }} /></div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Combined report: Gratuity/EOS + Air Ticket history side by side, for one employee, several,
+// or all — same "Report Selection" chip pattern used in Personal Loans/Vehicle Financing.
+// Domain names, software licenses, and other recurring subscriptions that need renewing on
+// time — same expiry-alert pattern as vehicle/staff insurance, kept as its own simple list.
+function SubscriptionsPanel({ subscriptions, setSubscriptions, currency, deletePin }) {
+  const [selectedId, setSelectedId] = useState(null);
+
+  function addEntry() { const s = emptySubscription(); setSubscriptions([...subscriptions, s]); setSelectedId(s.id); }
+  function updateEntry(id, patch) { setSubscriptions(subscriptions.map(s => s.id === id ? { ...s, ...patch } : s)); }
+  function deleteEntry(s) {
+    if (!confirmDelete(s.name || s.particulars || 'this subscription', deletePin)) return;
+    setSubscriptions(subscriptions.filter(x => x.id !== s.id));
+    if (selectedId === s.id) setSelectedId(null);
+  }
+
+  const sorted = subscriptions.slice().sort((a, b) => (a.expiryDate || '9999').localeCompare(b.expiryDate || '9999'));
+  const selected = subscriptions.find(s => s.id === selectedId);
+  const daysLeft = (d) => d ? Math.round((new Date(d) - new Date(todayStr())) / 86400000) : null;
+  const totalAmount = subscriptions.reduce((s, x) => s + num(x.amount), 0);
+
+  return (
+    <div>
+      <div className="panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <h3 style={{ margin: 0 }}>Subscriptions &amp; Domain Renewals</h3>
+          <button className="btn primary" onClick={addEntry}>+ Add Entry</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Domains, software licenses, and other recurring subscriptions — tracked here so nothing lapses unnoticed. A reminder banner appears starting 7 days before expiry.</p>
+        {sorted.length === 0 ? (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>No subscriptions added yet.</p>
+        ) : (
+          <table>
+            <thead><tr><th style={{ width: 40 }}>S.No</th><th>Particulars</th><th>Domain Name / Subscription</th><th>Expiry Date</th><th className="num">Amount</th><th></th></tr></thead>
+            <tbody>
+              {sorted.map((s, i) => {
+                const d = daysLeft(s.expiryDate);
+                return (
+                  <tr key={s.id} style={{ background: s.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(s.id)}>
+                    <td>{i + 1}</td>
+                    <td>{s.particulars || '—'}</td>
+                    <td>{s.name || '—'}</td>
+                    <td>{s.expiryDate ? <span className={`badge ${d !== null && d <= 7 ? 'neg' : 'pos'}`}>{fullDateLabel(s.expiryDate)}</span> : '—'}</td>
+                    <td className="num">{fmt(num(s.amount), currency)}</td>
+                    <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteEntry(s); }}>✕</button></td>
+                  </tr>
+                );
+              })}
+              <tr className="net-row"><td colSpan={4}>Total</td><td className="num">{fmt(totalAmount, currency)}</td><td></td></tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && (
+        <div className="panel">
+          <h3>Entry Details</h3>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '1 1 200px' }}><label>Particulars</label><input value={selected.particulars} onChange={e => updateEntry(selected.id, { particulars: e.target.value })} placeholder="e.g. Website hosting" /></div>
+            <div className="field" style={{ flex: '1 1 200px' }}><label>Domain Name / Subscription</label><input value={selected.name} onChange={e => updateEntry(selected.id, { name: e.target.value })} placeholder="e.g. thomsonrentacar.com" /></div>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+            <div className="field" style={{ flex: '1 1 160px' }}><label>Expiry Date</label><input type="date" value={selected.expiryDate} onChange={e => updateEntry(selected.id, { expiryDate: e.target.value })} /></div>
+            <div className="field" style={{ flex: '1 1 140px' }}><label>Amount ({currency})</label><input type="number" value={selected.amount} onChange={e => updateEntry(selected.id, { amount: e.target.value })} /></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function EmployeeReportPanel({ employees, airTickets, currency, selectedIds, setSelectedIds }) {
+  const displayEmployees = selectedIds.length ? employees.filter(e => selectedIds.includes(e.id)) : employees;
+
+  const gratuityTotal = displayEmployees.reduce((s, e) => s + gratuityStats(e).accrued, 0);
+  const ticketsPaidTotal = displayEmployees.reduce((s, e) => s + airTickets.filter(t => t.employeeId === e.id).reduce((ss, t) => ss + num(t.amountPaid), 0), 0);
+
+  return (
+    <div>
+      <div className="panel no-print">
+        <h3>Report Selection <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 12, textTransform: 'none' }}>— filters the report below</span></h3>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className={`chip ${selectedIds.length === 0 ? 'selected' : ''}`} onClick={() => setSelectedIds([])}>All Employees</div>
+          {employees.map(e => (
+            <div key={e.id} className={`chip ${selectedIds.includes(e.id) ? 'selected' : ''}`} onClick={() => setSelectedIds(selectedIds.includes(e.id) ? selectedIds.filter(id => id !== e.id) : [...selectedIds, e.id])}>{e.name || '(unnamed)'}</div>
+          ))}
+        </div>
+      </div>
+
+      {employees.length === 0 ? (
+        <div className="panel"><p style={{ color: 'var(--muted)', fontSize: 13 }}>Add employees first.</p></div>
+      ) : (
+        <>
+          <div className="kpi-row">
+            <div className="kpi-card"><div className="label">Employees in Report</div><div className="value mono">{displayEmployees.length}</div></div>
+            <div className="kpi-card"><div className="label">Total Accrued Gratuity</div><div className="value mono">{fmt(gratuityTotal, currency)}</div></div>
+            <div className="kpi-card"><div className="label">Total Air Tickets Paid (All Years)</div><div className="value mono">{fmt(ticketsPaidTotal, currency)}</div></div>
+          </div>
+
+          <div className="panel">
+            <h3>Gratuity / EOS Summary</h3>
+            <table>
+              <thead><tr><th>Employee</th><th>Designation</th><th className="num">Years of Service</th><th className="num">Entitlement Days</th><th className="num">Accrued Gratuity</th></tr></thead>
+              <tbody>
+                {displayEmployees.map(e => {
+                  const g = gratuityStats(e);
+                  return (
+                    <tr key={e.id}>
+                      <td>{e.name || '(unnamed)'}</td>
+                      <td>{e.designation || '—'}</td>
+                      <td className="num">{g.yearsOfService.toFixed(1)}</td>
+                      <td className="num">{g.entitlementDays.toFixed(1)}</td>
+                      <td className="num">{fmt(g.accrued, currency)}</td>
+                    </tr>
+                  );
+                })}
+                <tr className="net-row"><td>Total</td><td></td><td></td><td></td><td className="num">{fmt(gratuityTotal, currency)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel">
+            <h3>Air Tickets Availed</h3>
+            <table>
+              <thead><tr><th>Employee</th><th className="num">Years Paid</th><th className="num">Total Paid (All Years)</th><th className="num">Last Paid Year</th><th className="num">Next Due Year</th></tr></thead>
+              <tbody>
+                {displayEmployees.map(e => {
+                  const history = airTickets.filter(t => t.employeeId === e.id).sort((a, b) => num(b.yearPaid) - num(a.yearPaid));
+                  const totalPaid = history.reduce((s, t) => s + num(t.amountPaid), 0);
+                  const nextDue = nextTicketDueYear(e.id, airTickets);
+                  return (
+                    <tr key={e.id}>
+                      <td>{e.name || '(unnamed)'}</td>
+                      <td className="num">{history.length ? history.map(t => t.yearPaid).join(', ') : '—'}</td>
+                      <td className="num">{fmt(totalPaid, currency)}</td>
+                      <td className="num">{history[0] ? history[0].yearPaid : '—'}</td>
+                      <td className="num">{nextDue ? <span className={`badge ${nextDue <= new Date().getFullYear() ? 'neg' : 'pos'}`}>{nextDue}</span> : <span style={{ color: 'var(--muted)' }}>No history</span>}</td>
+                    </tr>
+                  );
+                })}
+                <tr className="net-row"><td>Total</td><td></td><td className="num">{fmt(ticketsPaidTotal, currency)}</td><td></td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+function emptyEmployee() {
+  return { id: uid('emp'), name: '', designation: '', joinDate: todayStr(), basicSalary: '', status: 'active', exitDate: '' };
+}
+function emptyStaffInsurancePolicy() {
+  return { id: uid('sins'), employeeId: '', policyNumber: '', insurer: '', premium: '', startDate: todayStr(), endDate: '' };
+}
+function emptyAirTicket() {
+  return { id: uid('tkt'), employeeId: '', yearPaid: new Date().getFullYear(), amountPaid: '', notes: '' };
+}
+
+// Standard UAE unlimited-contract gratuity formula: 21 days' basic pay per year of service
+// for the first 5 years, 30 days/year beyond that. No entitlement before 1 full year served.
+// This is a standard estimate, not legal advice — limited-contract or mixed cases may differ.
+function gratuityStats(employee, asOfDate) {
+  const join = employee.joinDate ? new Date(employee.joinDate) : null;
+  const end = employee.exitDate ? new Date(employee.exitDate) : new Date(asOfDate || todayStr());
+  if (!join || end <= join) return { yearsOfService: 0, entitlementDays: 0, dailyRate: 0, accrued: 0 };
+  const yearsOfService = (end - join) / (365.25 * 86400000);
+  const basic = num(employee.basicSalary);
+  const dailyRate = basic * 12 / 365;
+  let entitlementDays = 0;
+  if (yearsOfService >= 1) {
+    const first5 = Math.min(yearsOfService, 5) * 21;
+    const beyond5 = Math.max(0, yearsOfService - 5) * 30;
+    entitlementDays = first5 + beyond5;
+  }
+  return { yearsOfService, entitlementDays, dailyRate, accrued: entitlementDays * dailyRate };
+}
+
+// Same 7-day-heads-up / critical-on-lapse pattern as vehicleExpiryAlerts, for staff insurance.
+function staffInsuranceAlerts(employees, staffInsurancePolicies, today) {
+  const alerts = [];
+  const todayDate = new Date(today);
+  function daysUntil(dateStr) { if (!dateStr) return null; return Math.round((new Date(dateStr) - todayDate) / 86400000); }
+  function daysLabel(d) {
+    if (d < 0) return `expired ${Math.abs(d)} day${Math.abs(d) === 1 ? '' : 's'} ago`;
+    if (d === 0) return 'expires today';
+    return `${d} day${d === 1 ? '' : 's'} left`;
+  }
+  employees.filter(e => e.status === 'active').forEach(e => {
+    const list = (staffInsurancePolicies || []).filter(p => p.employeeId === e.id).sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''));
+    const latest = list[0];
+    const days = latest ? daysUntil(latest.endDate) : null;
+    if (days !== null && days <= 7) {
+      alerts.push({ employeeId: e.id, employeeName: e.name, daysLeft: days, message: `${e.name} — staff insurance ${daysLabel(days)} — process the renewal now`, severity: days < 0 ? 'critical' : 'warning' });
+    }
+  });
+  return alerts;
+}
+// Next Air Ticket due year for an employee — individually per employee, not a fixed
+// company-wide cycle: (most recent Year Paid) + 2. No history yet = no due date to show.
+function nextTicketDueYear(employeeId, airTickets) {
+  const paid = (airTickets || []).filter(t => t.employeeId === employeeId).map(t => num(t.yearPaid)).filter(Boolean);
+  if (!paid.length) return null;
+  return Math.max(...paid) + 2;
+}
+
+/* ---------------- Subscriptions & Domain Renewals ---------------- */
+function emptySubscription() {
+  return { id: uid('sub'), particulars: '', name: '', expiryDate: '', amount: '' };
+}
+// Same 7-day-heads-up / critical-on-lapse pattern as vehicle/staff insurance alerts.
+function subscriptionAlerts(subscriptions, today) {
+  const alerts = [];
+  const todayDate = new Date(today);
+  function daysUntil(dateStr) { if (!dateStr) return null; return Math.round((new Date(dateStr) - todayDate) / 86400000); }
+  function daysLabel(d) {
+    if (d < 0) return `expired ${Math.abs(d)} day${Math.abs(d) === 1 ? '' : 's'} ago`;
+    if (d === 0) return 'expires today';
+    return `${d} day${d === 1 ? '' : 's'} left`;
+  }
+  (subscriptions || []).forEach(s => {
+    const days = daysUntil(s.expiryDate);
+    if (days !== null && days <= 7) {
+      alerts.push({ subscriptionId: s.id, message: `${s.name || s.particulars || 'A subscription'} ${daysLabel(days)} — renew now`, severity: days < 0 ? 'critical' : 'warning' });
+    }
+  });
+  return alerts;
+}
+
 /* ---------------- Garage Movement ---------------- */
 function emptyGarageMovement() {
   return {
-    id: uid('grg'), movementNumber: '', vehicleId: '', garageName: '',
+    id: uid('grg'), movementNumber: '', vehicleId: '', plate: '', garageName: '',
     purpose: '', estimatedCost: '', remarks: '',
     movementInDate: todayStr(), movementOutDate: '',
   };
@@ -612,6 +1119,33 @@ function applySheetFormatting(ws, labelColWidth, dataColWidth, numCols) {
 
 // Builds the P&L Statement's rows for Excel export, in the exact same Chart-of-Accounts
 // order (with sub-accounts indented) as the on-screen report.
+// Builds Excel rows for the Employee Report: Gratuity Summary then Air Tickets Availed,
+// for whichever employees are selected (empty selection = all).
+function buildEmployeeReportRows(employees, airTickets, selectedIds) {
+  const displayEmployees = selectedIds.length ? employees.filter(e => selectedIds.includes(e.id)) : employees;
+  const rows = [['Gratuity / EOS Summary'], ['Employee', 'Designation', 'Years of Service', 'Entitlement Days', 'Accrued Gratuity']];
+  let gratuityTotal = 0;
+  displayEmployees.forEach(e => {
+    const g = gratuityStats(e);
+    gratuityTotal += g.accrued;
+    rows.push([e.name || '(unnamed)', e.designation || '', Number(g.yearsOfService.toFixed(1)), Number(g.entitlementDays.toFixed(1)), Math.round(g.accrued)]);
+  });
+  rows.push(['Total', '', '', '', Math.round(gratuityTotal)]);
+  rows.push([]);
+  rows.push(['Air Tickets Availed']);
+  rows.push(['Employee', 'Years Paid', 'Total Paid (All Years)', 'Last Paid Year', 'Next Due Year']);
+  let ticketsTotal = 0;
+  displayEmployees.forEach(e => {
+    const history = airTickets.filter(t => t.employeeId === e.id).sort((a, b) => num(b.yearPaid) - num(a.yearPaid));
+    const totalPaid = history.reduce((s, t) => s + num(t.amountPaid), 0);
+    ticketsTotal += totalPaid;
+    const nextDue = nextTicketDueYear(e.id, airTickets);
+    rows.push([e.name || '(unnamed)', history.map(t => t.yearPaid).join(', '), Math.round(totalPaid), history[0] ? history[0].yearPaid : '', nextDue || '']);
+  });
+  rows.push(['Total', '', Math.round(ticketsTotal), '', '']);
+  return rows;
+}
+
 function buildPnlStatementRows(rangeMonths, lineItems, monthlyData) {
   const totals = rangeAggregate(rangeMonths, monthlyData, lineItems);
   const rows = [['Account', 'Budget', 'Actual', 'Variance']];
@@ -1285,6 +1819,30 @@ function App() {
   const [agreements, setAgreements] = useState([]);
   const [garageMovements, setGarageMovements] = useState([]);
   const [nrmLogs, setNrmLogs] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [staffInsurancePolicies, setStaffInsurancePolicies] = useState([]);
+  const [airTickets, setAirTickets] = useState([]);
+  const [dismissedStaffInsuranceWarningIds, setDismissedStaffInsuranceWarningIds] = useState([]);
+  const [dismissedSubWarningIds, setDismissedSubWarningIds] = useState([]);
+  const [employeeReportSelectedIds, setEmployeeReportSelectedIds] = useState([]);
+  const [missingAgreementRefs, setMissingAgreementRefs] = useState([]);
+  const [subscriptions, setSubscriptions] = useState([]);
+  const NAV_GROUP_TABS = {
+    reports: ['quick-review', 'pnl-compare', 'pnl-statement', 'yoy-compare', 'occ-report', 'model-compare', 'financing', 'fleet-data-report', 'garage-movement', 'nrm-log', 'employees', 'investors-fleet'],
+    dataentry: ['pnl-entry', 'occ-entry', 'veh-revenue', 'agreements', 'feasibility', 'budget-planning', 'insurance'],
+    admin: ['vehicles', 'chart-of-accounts', 'import', 'notes', 'subscriptions'],
+  };
+  function navGroupForTab(tab) {
+    return Object.keys(NAV_GROUP_TABS).find(g => NAV_GROUP_TABS[g].includes(tab)) || null;
+  }
+  const [expandedNavGroup, setExpandedNavGroup] = useState(() => navGroupForTab('dashboard') || 'reports');
+  // Whenever the active tab changes (via nav click, a banner's "Go to X" button, etc.), make
+  // sure the group containing it is the one expanded — so you're never on a screen whose own
+  // section is collapsed in the sidebar.
+  useEffect(() => {
+    const g = navGroupForTab(activeTab);
+    if (g && g !== expandedNavGroup) setExpandedNavGroup(g);
+  }, [activeTab]);
   const [agreementPeriod, setAgreementPeriod] = useState(year + '-01');
   const [lastAgreementReview, setLastAgreementReview] = useState('');
   const [lastDailyAgreementCheck, setLastDailyAgreementCheck] = useState('');
@@ -1324,7 +1882,7 @@ function App() {
   }
 
   function currentFullState() {
-    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs };
+    return { companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs, employees, staffInsurancePolicies, airTickets, missingAgreementRefs, subscriptions };
   }
 
   async function performSave(pwOverride) {
@@ -1396,6 +1954,11 @@ function App() {
         if (data.agreements) setAgreements(data.agreements);
         if (data.garageMovements) setGarageMovements(data.garageMovements);
         if (data.nrmLogs) setNrmLogs(data.nrmLogs);
+        if (data.employees) setEmployees(data.employees);
+        if (data.staffInsurancePolicies) setStaffInsurancePolicies(data.staffInsurancePolicies);
+        if (data.airTickets) setAirTickets(data.airTickets);
+        if (data.missingAgreementRefs) setMissingAgreementRefs(data.missingAgreementRefs);
+        if (data.subscriptions) setSubscriptions(data.subscriptions);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1445,7 +2008,7 @@ function App() {
     if (!loaded || !authed) return;
     const t = setTimeout(() => { performSave(); }, 500);
     return () => clearTimeout(t);
-  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs, loaded, authed]);
+  }, [companyName, logoDataUrl, year, currency, baseDays, deletePin, lineItems, monthlyData, vehicles, occupancy, vehicleRevenue, defaultUsefulLife, feasibilityStudies, loans, reportFrom, reportTo, pnlEntryPeriod, vehicleEntryPeriod, monthlyRemarks, users, adminNotes, insurancePolicies, insuranceOverrides, personalLoans, personalCards, dashboardWidgets, agreements, agreementPeriod, lastAgreementReview, occupancyRemarks, vehicleRevenueRemarks, lastDailyAgreementCheck, garageMovements, nrmLogs, employees, staffInsurancePolicies, airTickets, missingAgreementRefs, subscriptions, loaded, authed]);
 
   // Keep every month's insurance Actual figure in sync with the auto-calculated policy
   // total (skipping any month the user has explicitly overridden) — runs across all
@@ -1520,6 +2083,12 @@ function App() {
   // the due date, not just after it's overdue — and it keeps showing until marked paid.
   const personalLoanReminders = useMemo(() => personalLoans.map(l => ({ loan: l, stats: loanStats(l) })).filter(x => x.stats.overdue || x.stats.dueSoon), [personalLoans]);
   const expiryAlerts = useMemo(() => vehicleExpiryAlerts(vehicles, insurancePolicies, todayStr()), [vehicles, insurancePolicies]);
+  const staffExpiryAlerts = useMemo(() => staffInsuranceAlerts(employees, staffInsurancePolicies, todayStr()), [employees, staffInsurancePolicies]);
+  const criticalStaffAlerts = staffExpiryAlerts.filter(a => a.severity === 'critical');
+  const warningStaffAlerts = staffExpiryAlerts.filter(a => a.severity === 'warning');
+  const subExpiryAlerts = useMemo(() => subscriptionAlerts(subscriptions, todayStr()), [subscriptions]);
+  const criticalSubAlerts = subExpiryAlerts.filter(a => a.severity === 'critical');
+  const warningSubAlerts = subExpiryAlerts.filter(a => a.severity === 'warning');
   const criticalExpiryAlerts = expiryAlerts.filter(a => a.severity === 'critical');
   const warningExpiryAlerts = expiryAlerts.filter(a => a.severity === 'warning');
   const [dismissedExpiryWarningIds, setDismissedExpiryWarningIds] = useState([]);
@@ -1629,6 +2198,11 @@ function App() {
         if (data.agreements) setAgreements(data.agreements);
         if (data.garageMovements) setGarageMovements(data.garageMovements);
         if (data.nrmLogs) setNrmLogs(data.nrmLogs);
+        if (data.employees) setEmployees(data.employees);
+        if (data.staffInsurancePolicies) setStaffInsurancePolicies(data.staffInsurancePolicies);
+        if (data.airTickets) setAirTickets(data.airTickets);
+        if (data.missingAgreementRefs) setMissingAgreementRefs(data.missingAgreementRefs);
+        if (data.subscriptions) setSubscriptions(data.subscriptions);
         if (data.agreementPeriod) setAgreementPeriod(data.agreementPeriod);
         if (data.lastAgreementReview) setLastAgreementReview(data.lastAgreementReview);
         if (data.lastDailyAgreementCheck) setLastDailyAgreementCheck(data.lastDailyAgreementCheck);
@@ -1655,6 +2229,7 @@ function App() {
     if (activeTab === 'quick-review') setPrintMode('quick-review');
     else if (activeTab === 'pnl-compare') setPrintMode('pnl');
     else if (activeTab === 'pnl-statement') { setPrintMode('pnlstatement'); setPrintOrientation(pnlStatementOrientation); }
+    else if (activeTab === 'employees') setPrintMode('employee-report');
     else if (activeTab === 'occ-report') setPrintMode('occupancy');
     else if (activeTab === 'model-compare') setPrintMode('model');
     else if (activeTab === 'feasibility') setPrintMode('feasibility');
@@ -1751,6 +2326,14 @@ function App() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccMatrixRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Matrix');
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildOccDistributionRows(rangeMonths, vehicles, occupancy, baseDays)), 'Occupancy Distribution');
       XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-occupancy-report-${reportFrom}_to_${reportTo}.xlsx`);
+      return;
+    }
+    if (activeTab === 'employees') {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(buildEmployeeReportRows(employees, airTickets, employeeReportSelectedIds));
+      applySheetFormatting(ws, 26, 16, 5);
+      XLSX.utils.book_append_sheet(wb, ws, 'Employee Report');
+      XLSX.writeFile(wb, `${companyName.replace(/[^a-z0-9]+/gi, '-')}-employee-report.xlsx`);
       return;
     }
     if (activeTab === 'pnl-statement') {
@@ -1850,7 +2433,11 @@ function App() {
             return (
               <>
                 <button className={`navbtn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')} style={{ marginBottom: 8 }}>🏠 Dashboard</button>
-                <div className="nav-group-label">Reports</div>
+
+                <button className="nav-group-header" onClick={() => setExpandedNavGroup(expandedNavGroup === 'reports' ? null : 'reports')}>
+                  <span>Reports</span><span className="chevron">{expandedNavGroup === 'reports' ? '▾' : '▸'}</span>
+                </button>
+                <div className={`nav-group-box ${expandedNavGroup === 'reports' ? '' : 'collapsed'}`}>
                 <button className={`navbtn ${activeTab === 'quick-review' ? 'active' : ''}`} onClick={() => setActiveTab('quick-review')}>⚡ Quick Review</button>
                 <button className={`navbtn ${activeTab === 'pnl-compare' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-compare')}>📊 P&amp;L Compare</button>
                 {allowed.includes('pnl-statement') && <button className={`navbtn ${activeTab === 'pnl-statement' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-statement')}>🧾 P&amp;L Statement</button>}
@@ -1861,9 +2448,16 @@ function App() {
                 {allowed.includes('fleet-data-report') && <button className={`navbtn ${activeTab === 'fleet-data-report' ? 'active' : ''}`} onClick={() => setActiveTab('fleet-data-report')}>🗂 Fleet Data Report</button>}
                 {allowed.includes('garage-movement') && <button className={`navbtn ${activeTab === 'garage-movement' ? 'active' : ''}`} onClick={() => setActiveTab('garage-movement')}>🔧 Garage Movement</button>}
                 {allowed.includes('nrm-log') && <button className={`navbtn ${activeTab === 'nrm-log' ? 'active' : ''}`} onClick={() => setActiveTab('nrm-log')}>🧍 Staff Usage (NRM)</button>}
+                {allowed.includes('employees') && <button className={`navbtn ${activeTab === 'employees' ? 'active' : ''}`} onClick={() => setActiveTab('employees')}>👤 Employees</button>}
                 {allowed.includes('investors-fleet') && <button className={`navbtn ${activeTab === 'investors-fleet' ? 'active' : ''}`} onClick={() => setActiveTab('investors-fleet')}>🤝 Investors Fleet</button>}
+                </div>
 
-                {showDataEntryGroup && <div className="nav-group-label">Data Entry</div>}
+                {showDataEntryGroup && (
+                  <>
+                    <button className="nav-group-header" onClick={() => setExpandedNavGroup(expandedNavGroup === 'dataentry' ? null : 'dataentry')}>
+                      <span>Data Entry</span><span className="chevron">{expandedNavGroup === 'dataentry' ? '▾' : '▸'}</span>
+                    </button>
+                    <div className={`nav-group-box ${expandedNavGroup === 'dataentry' ? '' : 'collapsed'}`}>
                 {allowed.includes('pnl-entry') && <button className={`navbtn ${activeTab === 'pnl-entry' ? 'active' : ''}`} onClick={() => setActiveTab('pnl-entry')}>📋 P&amp;L Entry</button>}
                 {allowed.includes('occ-entry') && <button className={`navbtn ${activeTab === 'occ-entry' ? 'active' : ''}`} onClick={() => setActiveTab('occ-entry')}>⏱ Occupancy Entry</button>}
                 {allowed.includes('veh-revenue') && <button className={`navbtn ${activeTab === 'veh-revenue' ? 'active' : ''}`} onClick={() => setActiveTab('veh-revenue')}>💵 Vehicle Revenue Entry</button>}
@@ -1871,12 +2465,24 @@ function App() {
                 {allowed.includes('feasibility') && <button className={`navbtn ${activeTab === 'feasibility' ? 'active' : ''}`} onClick={() => setActiveTab('feasibility')}>🧮 Feasibility Study</button>}
                 {allowed.includes('budget-planning') && <button className={`navbtn ${activeTab === 'budget-planning' ? 'active' : ''}`} onClick={() => setActiveTab('budget-planning')}>🗓 Budget Planning</button>}
                 {allowed.includes('insurance') && <button className={`navbtn ${activeTab === 'insurance' ? 'active' : ''}`} onClick={() => setActiveTab('insurance')}>🛡 Insurance Policies</button>}
+                    </div>
+                  </>
+                )}
 
-                {showAdminGroup && <div className="nav-group-label">Administration</div>}
+                {showAdminGroup && (
+                  <>
+                    <button className="nav-group-header" onClick={() => setExpandedNavGroup(expandedNavGroup === 'admin' ? null : 'admin')}>
+                      <span>Administration</span><span className="chevron">{expandedNavGroup === 'admin' ? '▾' : '▸'}</span>
+                    </button>
+                    <div className={`nav-group-box ${expandedNavGroup === 'admin' ? '' : 'collapsed'}`}>
                 {allowed.includes('vehicles') && <button className={`navbtn ${activeTab === 'vehicles' ? 'active' : ''}`} onClick={() => setActiveTab('vehicles')}>🚙 Vehicles</button>}
                 {allowed.includes('chart-of-accounts') && <button className={`navbtn ${activeTab === 'chart-of-accounts' ? 'active' : ''}`} onClick={() => setActiveTab('chart-of-accounts')}>📑 Chart of Accounts</button>}
                 {allowed.includes('import') && <button className={`navbtn ${activeTab === 'import' ? 'active' : ''}`} onClick={() => setActiveTab('import')}>📥 Import Excel</button>}
                 {allowed.includes('notes') && <button className={`navbtn ${activeTab === 'notes' ? 'active' : ''}`} onClick={() => setActiveTab('notes')}>📝 Notes</button>}
+                {allowed.includes('subscriptions') && <button className={`navbtn ${activeTab === 'subscriptions' ? 'active' : ''}`} onClick={() => setActiveTab('subscriptions')}>🔔 Subscriptions &amp; Domains</button>}
+                    </div>
+                  </>
+                )}
 
                 {allowed.includes('personal-finance') && <div className="nav-group-label">Personal (Admin Only)</div>}
                 {allowed.includes('personal-finance') && <button className={`navbtn ${activeTab === 'personal-finance' ? 'active' : ''}`} onClick={() => setActiveTab('personal-finance')}>💳 Personal Finance</button>}
@@ -2010,6 +2616,48 @@ function App() {
           </div>
         )}
 
+        {criticalStaffAlerts.length > 0 && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Staff Insurance Due</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {criticalStaffAlerts.length === 1 ? criticalStaffAlerts[0].message : `${criticalStaffAlerts.length} staff insurance policies need renewing right away.`}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('employees')}>Go to Employees</button>
+          </div>
+        )}
+
+        {warningStaffAlerts.filter(a => !dismissedStaffInsuranceWarningIds.includes(a.employeeId)).length > 0 && (
+          <div className="no-print" style={{ background: '#FFF6E8', borderBottom: '1px solid var(--amber)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>⚠ Staff Insurance Renewals Coming Up</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {(() => { const list = warningStaffAlerts.filter(a => !dismissedStaffInsuranceWarningIds.includes(a.employeeId)); return list.length === 1 ? list[0].message : `${list.length} staff insurance policies expiring within a week.`; })()}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('employees')}>Go to Employees</button>
+            <button className="btn small" onClick={() => setDismissedStaffInsuranceWarningIds([...dismissedStaffInsuranceWarningIds, ...warningStaffAlerts.map(a => a.employeeId)])}>Dismiss</button>
+          </div>
+        )}
+
+        {criticalSubAlerts.length > 0 && (
+          <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Subscription/Domain Expired</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {criticalSubAlerts.length === 1 ? criticalSubAlerts[0].message : `${criticalSubAlerts.length} subscriptions/domains need renewing right away.`}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('subscriptions')}>Go to Subscriptions</button>
+          </div>
+        )}
+
+        {warningSubAlerts.filter(a => !dismissedSubWarningIds.includes(a.subscriptionId)).length > 0 && (
+          <div className="no-print" style={{ background: '#FFF6E8', borderBottom: '1px solid var(--amber)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--amber)', fontSize: 13, fontWeight: 600 }}>⚠ Renewals Coming Up</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>
+              {(() => { const list = warningSubAlerts.filter(a => !dismissedSubWarningIds.includes(a.subscriptionId)); return list.length === 1 ? list[0].message : `${list.length} subscriptions/domains expiring within a week.`; })()}
+            </span>
+            <button className="btn small" onClick={() => setActiveTab('subscriptions')}>Go to Subscriptions</button>
+            <button className="btn small" onClick={() => setDismissedSubWarningIds([...dismissedSubWarningIds, ...warningSubAlerts.map(a => a.subscriptionId)])}>Dismiss</button>
+          </div>
+        )}
+
         {showReauth && (
           <div className="no-print" style={{ background: '#FDEDEC', borderBottom: '1px solid var(--red)', padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--red)', fontSize: 13, fontWeight: 600 }}>⚠ Couldn't save — your password may have changed.</span>
@@ -2039,11 +2687,13 @@ function App() {
           {activeTab === 'import' && <ImportPanel lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} monthKeys={monthKeys} />}
           {activeTab === 'notes' && <NotesPanel notes={adminNotes} setNotes={setAdminNotes} deletePin={deletePin} />}
           {activeTab === 'insurance' && <InsurancePanel policies={insurancePolicies} setPolicies={setInsurancePolicies} vehicles={vehicles} setVehicles={setVehicles} currency={currency} deletePin={deletePin} rangeMonths={rangeMonths} />}
-          {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} garageMovements={garageMovements} setGarageMovements={setGarageMovements} nrmLogs={nrmLogs} setNrmLogs={setNrmLogs} />}
+          {activeTab === 'agreements' && <AgreementsPanel agreements={agreements} setAgreements={setAgreements} vehicles={vehicles} currency={currency} deletePin={deletePin} garageMovements={garageMovements} setGarageMovements={setGarageMovements} nrmLogs={nrmLogs} setNrmLogs={setNrmLogs} missingAgreementRefs={missingAgreementRefs} setMissingAgreementRefs={setMissingAgreementRefs} />}
           {activeTab === 'budget-planning' && <BudgetPlanningPanel lineItems={lineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} year={year} deletePin={deletePin} monthKeys={monthKeys} currentPeriod={pnlEntryPeriod} />}
           {activeTab === 'fleet-data-report' && <FleetDataReportPanel vehicles={vehicles} setVehicles={setVehicles} insurancePolicies={insurancePolicies} setInsurancePolicies={setInsurancePolicies} currency={currency} />}
           {activeTab === 'garage-movement' && <GarageMovementPanel vehicles={vehicles} agreements={agreements} garageMovements={garageMovements} setGarageMovements={setGarageMovements} deletePin={deletePin} currency={currency} />}
           {activeTab === 'nrm-log' && <NrmLogPanel vehicles={vehicles} nrmLogs={nrmLogs} setNrmLogs={setNrmLogs} deletePin={deletePin} />}
+          {activeTab === 'employees' && <EmployeePanel employees={employees} setEmployees={setEmployees} staffInsurancePolicies={staffInsurancePolicies} setStaffInsurancePolicies={setStaffInsurancePolicies} airTickets={airTickets} setAirTickets={setAirTickets} currency={currency} deletePin={deletePin} reportSelectedIds={employeeReportSelectedIds} setReportSelectedIds={setEmployeeReportSelectedIds} />}
+          {activeTab === 'subscriptions' && <SubscriptionsPanel subscriptions={subscriptions} setSubscriptions={setSubscriptions} currency={currency} deletePin={deletePin} />}
           {activeTab === 'investors-fleet' && <InvestorsFleetPanel vehicles={vehicles} vehicleRevenue={vehicleRevenue} rangeMonths={rangeMonths} currency={currency} />}
           {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} users={users} setUsers={setUsers} />}
@@ -2070,6 +2720,11 @@ function App() {
           <div className="pnl-statement-print" style={{ padding: 24 }}>
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`P&L Statement · ${rangeMonths.map(monthLabel).join(' – ')}`} />
             <PnlStatement monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} companyName={companyName} viewMode={pnlStatementViewMode} setViewMode={setPnlStatementViewMode} />
+          </div>
+        ) : printMode === 'employee-report' ? (
+          <div style={{ padding: 24 }}>
+            <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle="Employee Report — Gratuity/EOS & Air Tickets" />
+            <EmployeeReportPanel employees={employees} airTickets={airTickets} currency={currency} selectedIds={employeeReportSelectedIds} setSelectedIds={setEmployeeReportSelectedIds} />
           </div>
         ) : printMode === 'occupancy' ? (
           <div style={{ padding: 24 }}>
@@ -3046,12 +3701,24 @@ function PnlEntry({ monthKeys, lineItems, setLineItems, monthlyData, setMonthlyD
 
 function YoyComparePanel({ lineItems, monthlyData, currency, vehicles, occupancy, baseDays }) {
   const nowYear = new Date().getFullYear();
+  const [compareMode, setCompareMode] = useState('fullyear'); // 'fullyear' | 'custom'
   const [yearA, setYearA] = useState(nowYear - 1);
   const [yearB, setYearB] = useState(nowYear);
   const [basis, setBasis] = useState('actual'); // 'actual' | 'budget'
 
-  const monthsA = monthsOf(yearA);
-  const monthsB = monthsOf(yearB);
+  // Custom mode: two fully independent periods — e.g. Jan–Sep 2025 vs Jan–Sep 2026, or any
+  // two arbitrary ranges. Defaults to the same Jan-to-current-month span one year apart,
+  // since that's the most common comparison (year-to-date vs year-to-date).
+  const thisMonthStr = todayStr().slice(0, 7);
+  const [customFromA, setCustomFromA] = useState((nowYear - 1) + '-01');
+  const [customToA, setCustomToA] = useState((nowYear - 1) + '-' + thisMonthStr.slice(5, 7));
+  const [customFromB, setCustomFromB] = useState(nowYear + '-01');
+  const [customToB, setCustomToB] = useState(thisMonthStr);
+
+  const monthsA = compareMode === 'fullyear' ? monthsOf(yearA) : periodsBetween(customFromA, customToA);
+  const monthsB = compareMode === 'fullyear' ? monthsOf(yearB) : periodsBetween(customFromB, customToB);
+  const labelA = compareMode === 'fullyear' ? String(yearA) : (monthsA.length ? `${monthLabel(monthsA[0])} – ${monthLabel(monthsA[monthsA.length - 1])}` : '—');
+  const labelB = compareMode === 'fullyear' ? String(yearB) : (monthsB.length ? `${monthLabel(monthsB[0])} – ${monthLabel(monthsB[monthsB.length - 1])}` : '—');
   const totalsA = rangeAggregate(monthsA, monthlyData, lineItems);
   const totalsB = rangeAggregate(monthsB, monthlyData, lineItems);
 
@@ -3076,36 +3743,81 @@ function YoyComparePanel({ lineItems, monthlyData, currency, vehicles, occupancy
     { label: 'Net Profit / Loss', a: totalsA[`netprofit_${basis}`], b: totalsB[`netprofit_${basis}`] },
   ];
 
-  const monthlyRows = MONTH_NAMES.map((mName, mi) => {
-    const pA = yearA + '-' + String(mi + 1).padStart(2, '0');
-    const pB = yearB + '-' + String(mi + 1).padStart(2, '0');
-    const cA = computeMonth(pA, monthlyData, lineItems);
-    const cB = computeMonth(pB, monthlyData, lineItems);
-    return { month: mName, incomeA: cA[`income_${basis}`], incomeB: cB[`income_${basis}`], netA: cA[`netprofit_${basis}`], netB: cB[`netprofit_${basis}`] };
-  });
+  // Full Year mode pairs by calendar month (Jan of A vs Jan of B, etc.) — the two years line
+  // up month-for-month by definition. Custom mode pairs by POSITION within each range instead
+  // (1st month of A vs 1st month of B, 2nd vs 2nd...), since the two ranges may start on
+  // different calendar months and only their relative position makes them comparable.
+  const monthlyRows = compareMode === 'fullyear'
+    ? MONTH_NAMES.map((mName, mi) => {
+      const pA = yearA + '-' + String(mi + 1).padStart(2, '0');
+      const pB = yearB + '-' + String(mi + 1).padStart(2, '0');
+      const cA = computeMonth(pA, monthlyData, lineItems);
+      const cB = computeMonth(pB, monthlyData, lineItems);
+      return { month: mName, incomeA: cA[`income_${basis}`], incomeB: cB[`income_${basis}`], netA: cA[`netprofit_${basis}`], netB: cB[`netprofit_${basis}`] };
+    })
+    : Array.from({ length: Math.max(monthsA.length, monthsB.length) }).map((_, i) => {
+      const pA = monthsA[i], pB = monthsB[i];
+      const cA = pA ? computeMonth(pA, monthlyData, lineItems) : null;
+      const cB = pB ? computeMonth(pB, monthlyData, lineItems) : null;
+      return {
+        month: `${pA ? monthLabel(pA) : '—'} vs ${pB ? monthLabel(pB) : '—'}`,
+        incomeA: cA ? cA[`income_${basis}`] : null, incomeB: cB ? cB[`income_${basis}`] : null,
+        netA: cA ? cA[`netprofit_${basis}`] : null, netB: cB ? cB[`netprofit_${basis}`] : null,
+      };
+    });
 
   return (
     <div>
       <div className="panel">
         <h3>Year-over-Year Comparison</h3>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Compares two full years side by side, month by month, using whichever periods you've already entered data for — no separate setup needed.</p>
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="field"><label>Year A (baseline)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearA(yearA - 1)}>−</button><input type="number" value={yearA} onChange={e => setYearA(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearA(yearA + 1)}>+</button></div></div>
-          <div className="field"><label>Year B (comparison)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearB(yearB - 1)}>−</button><input type="number" value={yearB} onChange={e => setYearB(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearB(yearB + 1)}>+</button></div></div>
-          <div className="field">
-            <label>Basis</label>
-            <select value={basis} onChange={e => setBasis(e.target.value)}>
-              <option value="actual">Actual</option>
-              <option value="budget">Budget</option>
-            </select>
-          </div>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Compare two full years, or any two custom periods (e.g. Jan–Sep 2025 vs Jan–Sep 2026), using whichever data you've already entered — no separate setup needed.</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <div className={`chip ${compareMode === 'fullyear' ? 'selected' : ''}`} onClick={() => setCompareMode('fullyear')}>Compare Two Full Years</div>
+          <div className={`chip ${compareMode === 'custom' ? 'selected' : ''}`} onClick={() => setCompareMode('custom')}>Compare Two Custom Periods</div>
         </div>
+        {compareMode === 'fullyear' ? (
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="field"><label>Year A (baseline)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearA(yearA - 1)}>−</button><input type="number" value={yearA} onChange={e => setYearA(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearA(yearA + 1)}>+</button></div></div>
+            <div className="field"><label>Year B (comparison)</label><div style={{ display: 'flex', gap: 4, alignItems: 'center' }}><button className="btn small" onClick={() => setYearB(yearB - 1)}>−</button><input type="number" value={yearB} onChange={e => setYearB(Number(e.target.value))} style={{ width: 70 }} /><button className="btn small" onClick={() => setYearB(yearB + 1)}>+</button></div></div>
+            <div className="field">
+              <label>Basis</label>
+              <select value={basis} onChange={e => setBasis(e.target.value)}>
+                <option value="actual">Actual</option>
+                <option value="budget">Budget</option>
+              </select>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 700, marginBottom: 6 }}>PERIOD A (BASELINE)</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div className="field"><label>From</label><input type="month" value={customFromA} onChange={e => setCustomFromA(e.target.value)} /></div>
+                <div className="field"><label>To</label><input type="month" value={customToA} onChange={e => setCustomToA(e.target.value)} /></div>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 700, marginBottom: 6 }}>PERIOD B (COMPARISON)</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div className="field"><label>From</label><input type="month" value={customFromB} onChange={e => setCustomFromB(e.target.value)} /></div>
+                <div className="field"><label>To</label><input type="month" value={customToB} onChange={e => setCustomToB(e.target.value)} /></div>
+              </div>
+            </div>
+            <div className="field">
+              <label>Basis</label>
+              <select value={basis} onChange={e => setBasis(e.target.value)}>
+                <option value="actual">Actual</option>
+                <option value="budget">Budget</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="panel">
-        <h3>Annual Totals — {basis === 'actual' ? 'Actual' : 'Budget'}</h3>
+        <h3>Totals — {basis === 'actual' ? 'Actual' : 'Budget'}</h3>
         <table>
-          <thead><tr><th>Metric</th><th className="num">{yearA}</th><th className="num">{yearB}</th><th className="num">Change</th><th>Var %</th></tr></thead>
+          <thead><tr><th>Metric</th><th className="num">{labelA}</th><th className="num">{labelB}</th><th className="num">Change</th><th>Var %</th></tr></thead>
           <tbody>
             {rows.map(r => {
               const v = rowVariance(r.a, r.b, r.label.includes('Expense') ? 'expense' : 'income');
@@ -3131,24 +3843,24 @@ function YoyComparePanel({ lineItems, monthlyData, currency, vehicles, occupancy
       </div>
 
       <div className="panel">
-        <h3>Income by Month — {yearA} vs {yearB}</h3>
-        <GroupedBarChart data={monthlyRows.map(r => ({ label: r.month, [String(yearA)]: r.incomeA, [String(yearB)]: r.incomeB }))}
-          series={[{ key: String(yearA), label: String(yearA), color: '#C9D6DC' }, { key: String(yearB), label: String(yearB), color: '#2D6E8E' }]} height={200} />
+        <h3>Income by Month — {labelA} vs {labelB}</h3>
+        <GroupedBarChart data={monthlyRows.map(r => ({ label: r.month, [labelA]: r.incomeA, [labelB]: r.incomeB }))}
+          series={[{ key: labelA, label: labelA, color: '#C9D6DC' }, { key: labelB, label: labelB, color: '#2D6E8E' }]} height={200} />
       </div>
 
       <div className="panel" style={{ overflowX: 'auto' }}>
         <h3>Month-by-Month Detail</h3>
         <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>All figures in {currency}</p>
         <table>
-          <thead><tr><th>Month</th><th className="num">{yearA} Income</th><th className="num">{yearB} Income</th><th className="num">{yearA} Net Profit</th><th className="num">{yearB} Net Profit</th></tr></thead>
+          <thead><tr><th>Month</th><th className="num">{labelA} Income</th><th className="num">{labelB} Income</th><th className="num">{labelA} Net Profit</th><th className="num">{labelB} Net Profit</th></tr></thead>
           <tbody>
-            {monthlyRows.map(r => (
-              <tr key={r.month}>
+            {monthlyRows.map((r, i) => (
+              <tr key={i}>
                 <td>{r.month}</td>
-                <td className="num">{fmtNum(r.incomeA)}</td>
-                <td className="num">{fmtNum(r.incomeB)}</td>
-                <td className="num" style={{ color: r.netA >= 0 ? 'var(--ink)' : 'var(--red)' }}>{fmtNum(r.netA)}</td>
-                <td className="num" style={{ color: r.netB >= 0 ? 'var(--ink)' : 'var(--red)' }}>{fmtNum(r.netB)}</td>
+                <td className="num">{r.incomeA === null ? '—' : fmtNum(r.incomeA)}</td>
+                <td className="num">{r.incomeB === null ? '—' : fmtNum(r.incomeB)}</td>
+                <td className="num" style={{ color: r.netA === null ? undefined : (r.netA >= 0 ? 'var(--ink)' : 'var(--red)') }}>{r.netA === null ? '—' : fmtNum(r.netA)}</td>
+                <td className="num" style={{ color: r.netB === null ? undefined : (r.netB >= 0 ? 'var(--ink)' : 'var(--red)') }}>{r.netB === null ? '—' : fmtNum(r.netB)}</td>
               </tr>
             ))}
           </tbody>
@@ -3491,7 +4203,7 @@ function PnlStatement({ monthKeys, lineItems, monthlyData, currency, companyName
 
 /* ---------------- Staff Usage / NRM (Non-Revenue Movement) ---------------- */
 function emptyNrmLog() {
-  return { id: uid('nrm'), vehicleId: '', staffName: '', dateOut: todayStr(), dateIn: '', mileageOut: '', mileageIn: '' };
+  return { id: uid('nrm'), vehicleId: '', plate: '', staffName: '', dateOut: todayStr(), dateIn: '', mileageOut: '', mileageIn: '' };
 }
 function NrmLogPanel({ vehicles, nrmLogs, setNrmLogs, deletePin }) {
   const [selectedId, setSelectedId] = useState(null);
@@ -3509,7 +4221,12 @@ function NrmLogPanel({ vehicles, nrmLogs, setNrmLogs, deletePin }) {
   }
 
   const sorted = nrmLogs.slice().sort((a, b) => (b.dateOut || '').localeCompare(a.dateOut || ''));
-  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.plate} — ${v.name}` : '—'; };
+  const vehicleLabel = (n) => {
+    const v = n.vehicleId ? vehicles.find(x => x.id === n.vehicleId) : null;
+    if (v) return `${v.plate} — ${v.name}`;
+    if (n.plate) return <span>{n.plate} <span className="badge neg" style={{ marginLeft: 4 }}>Not matched</span></span>;
+    return '—';
+  };
   const selected = nrmLogs.find(n => n.id === selectedId);
 
   return (
@@ -3519,25 +4236,32 @@ function NrmLogPanel({ vehicles, nrmLogs, setNrmLogs, deletePin }) {
           <h3 style={{ margin: 0 }}>Staff Usage — Non-Revenue Movement (NRM)</h3>
           <button className="btn primary" onClick={addEntry}>+ New Entry</button>
         </div>
-        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Internal/staff vehicle usage that isn't a rental — e.g. staff pickups, internal errands. Tracked separately from Agreements and Garage Movement.</p>
+        <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Internal/staff vehicle usage that isn't a rental — e.g. staff pickups, internal errands. Tracked separately from Agreements and Garage Movement. Rows with a "Not matched" vehicle mean the plate from import didn't match your fleet — use ✎ Edit to set it manually.</p>
         {sorted.length === 0 ? (
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>No staff usage entries yet.</p>
         ) : (
           <table>
             <thead><tr><th style={{ width: 40 }}>S.No</th><th>Vehicle</th><th>Staff</th><th className="num">Date Out</th><th className="num">Date In</th><th className="num">Mileage Out</th><th className="num">Mileage In</th><th></th></tr></thead>
             <tbody>
-              {sorted.map((n, i) => (
-                <tr key={n.id} style={{ background: n.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(n.id)}>
-                  <td>{i + 1}</td>
-                  <td>{vehicleName(n.vehicleId)}</td>
-                  <td>{n.staffName || '—'}</td>
-                  <td className="num">{n.dateOut ? fullDateLabel(n.dateOut) : '—'}</td>
-                  <td className="num">{n.dateIn ? fullDateLabel(n.dateIn) : <span className="badge neg">Still out</span>}</td>
-                  <td className="num">{n.mileageOut || '—'}</td>
-                  <td className="num">{n.mileageIn || '—'}</td>
-                  <td style={{ textAlign: 'right' }}><button className="icon-btn" onClick={e => { e.stopPropagation(); deleteEntry(n); }}>✕</button></td>
-                </tr>
-              ))}
+              {sorted.map((n, i) => {
+                const returned = !!n.dateIn;
+                return (
+                  <tr key={n.id} style={{ background: n.id === selectedId ? '#EFF4F1' : (returned ? '#F4F5F2' : undefined), color: returned ? 'var(--muted)' : undefined }}>
+                    <td>{i + 1}</td>
+                    <td>{vehicleLabel(n)}</td>
+                    <td>{n.staffName || '—'}</td>
+                    <td className="num">{n.dateOut ? fullDateLabel(n.dateOut) : '—'}</td>
+                    <td className="num">{n.dateIn ? fullDateLabel(n.dateIn) : <span className="badge neg">Still out</span>}</td>
+                    <td className="num">{n.mileageOut || '—'}</td>
+                    <td className="num">{n.mileageIn || '—'}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {!returned && <button className="icon-btn" title="Mark Returned (today)" onClick={() => updateEntry(n.id, { dateIn: todayStr() })}>✓</button>}
+                      <button className="icon-btn" title="Edit" onClick={() => setSelectedId(n.id)}>✎</button>
+                      <button className="icon-btn" onClick={() => deleteEntry(n)}>✕</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -3611,6 +4335,9 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, rema
 /* ---------------- Occupancy Report (uses global report range) ---------------- */
 
 function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, currency, vehicleRevenue, selectedVehicleIds, onToggleVehicleSelect, onSelectAllVehicles, onSelectCategory, reportFrom, setReportFrom, reportTo, setReportTo, occupancyRemarks, vehicleRevenueRemarks }) {
+  // Off by default — Sub-Lease vehicles are borrowed, not part of the owned fleet this
+  // report is centered on, so they only appear once explicitly asked for.
+  const [showSubLease, setShowSubLease] = useState(false);
   // Computed from the full, unfiltered fleet — used only for the category selector chips,
   // so picking one category doesn't make the others disappear on the next render (unlike
   // categoryList below, which is intentionally scoped to whatever's currently selected, for
@@ -3630,7 +4357,7 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
   });
   const buckets = { '0-30%': 0, '31-50%': 0, '51-75%': 0, '76-100%+': 0 };
   rows.forEach(r => { if (r.avg === null) return; if (r.avg < 0.3) buckets['0-30%']++; else if (r.avg < 0.5) buckets['31-50%']++; else if (r.avg < 0.75) buckets['51-75%']++; else buckets['76-100%+']++; });
-  const barData = rows.filter(r => r.avg !== null).map(r => ({ name: r.vehicle.name, value: Math.round(r.avg * 100), display: Math.round(r.avg * 100) + '%', color: r.avg >= 0.5 ? '#3E9C6E' : '#C1503F' })).sort((a, b) => b.value - a.value);
+  const barData = rows.filter(r => r.avg !== null).map(r => ({ name: `${r.vehicle.plate} — ${r.vehicle.name}`, value: Math.round(r.avg * 100), display: Math.round(r.avg * 100) + '%', color: r.avg >= 0.5 ? '#3E9C6E' : '#C1503F' })).sort((a, b) => b.value - a.value);
   const validAvgs = rows.filter(r => r.avg !== null);
   const fleetAvg = validAvgs.length ? validAvgs.reduce((s, r) => s + r.avg, 0) / validAvgs.length : 0;
 
@@ -3688,7 +4415,7 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <div className={`chip ${selectedVehicleIds.length === 0 ? 'selected' : ''}`} onClick={onSelectAllVehicles}>All Cars</div>
             {vehicles.map(v => (
-              <div key={v.id} className={`chip ${selectedVehicleIds.includes(v.id) ? 'selected' : ''}`} onClick={() => onToggleVehicleSelect(v.id)}>{v.name}</div>
+              <div key={v.id} className={`chip ${selectedVehicleIds.includes(v.id) ? 'selected' : ''}`} onClick={() => onToggleVehicleSelect(v.id)}>{v.plate} — {v.name}</div>
             ))}
           </div>
         </div>
@@ -3814,24 +4541,48 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
       </div>
 
       {agreements && agreements.some(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate) && agreementStatsForRange(a, monthKeys).days > 0) && (
+        <div className="panel no-print">
+          <div className={`chip ${showSubLease ? 'selected' : ''}`} onClick={() => setShowSubLease(!showSubLease)}>
+            {showSubLease ? '✓ ' : ''}Show Sub-Lease Vehicles (Borrowed)
+          </div>
+        </div>
+      )}
+
+      {showSubLease && agreements && agreements.some(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate) && agreementStatsForRange(a, monthKeys).days > 0) && (
         <div className="panel" style={{ overflowX: 'auto', borderLeft: '4px solid var(--steel)' }}>
           <h3>Sub-Lease Vehicles (Borrowed — not part of owned fleet totals above)</h3>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -8, marginBottom: 10 }}>Scoped to {monthKeys.length === 1 ? monthLabel(monthKeys[0]) : `${monthLabel(monthKeys[0])} – ${monthLabel(monthKeys[monthKeys.length - 1])}`} only — Days/Revenue reflect just this period, not the agreement's full term.</p>
           <table>
-            <thead><tr><th>S.No</th><th>RA#</th><th>Plate</th><th>Type</th><th>Start</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th></tr></thead>
+            <thead><tr><th>S.No</th><th>RA#</th><th>Plate</th><th>Car Name</th><th>Type</th><th>Start</th><th>Status</th><th className="num">Days</th><th className="num">Revenue</th></tr></thead>
             <tbody>
-              {agreements.filter(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate) && agreementStatsForRange(a, monthKeys).days > 0).map((a, i) => {
-                const stats = agreementStatsForRange(a, monthKeys);
+              {(() => {
+                const subLeaseRows = agreements.filter(a => a.status !== 'void' && !findVehicleByPlate(vehicles, a.plate) && agreementStatsForRange(a, monthKeys).days > 0);
+                const totalDays = subLeaseRows.reduce((s, a) => s + agreementStatsForRange(a, monthKeys).days, 0);
+                const totalRevenue = subLeaseRows.reduce((s, a) => s + agreementStatsForRange(a, monthKeys).revenue, 0);
                 return (
-                  <tr key={a.id}>
-                    <td>{i + 1}</td><td>{a.raNumber || '—'}</td><td>{a.plate}</td><td>{agreementTypeBadge(a)}</td>
-                    <td>{a.startDate}</td>
-                    <td><span className={`badge ${a.status === 'open' ? 'pos' : ''}`}>{a.status}</span></td>
-                    <td className="num">{stats.days}</td>
-                    <td className="num">{fmt(stats.revenue, currency)}</td>
-                  </tr>
+                  <>
+                    {subLeaseRows.map((a, i) => {
+                      const stats = agreementStatsForRange(a, monthKeys);
+                      return (
+                        <tr key={a.id}>
+                          <td>{i + 1}</td><td>{a.raNumber || '—'}</td><td>{a.plate}</td>
+                          <td>{a.carName || <span style={{ color: 'var(--muted)' }}>Unknown</span>}</td>
+                          <td>{agreementTypeBadge(a)}</td>
+                          <td>{a.startDate}</td>
+                          <td><span className={`badge ${a.status === 'open' ? 'pos' : ''}`}>{a.status}</span></td>
+                          <td className="num">{stats.days}</td>
+                          <td className="num">{fmt(stats.revenue, currency)}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="net-row">
+                      <td colSpan={7}>Total</td>
+                      <td className="num">{totalDays}</td>
+                      <td className="num">{fmt(totalRevenue, currency)}</td>
+                    </tr>
+                  </>
                 );
-              })}
+              })()}
             </tbody>
           </table>
         </div>
@@ -4441,6 +5192,15 @@ function FinancingPanel({ loans, setLoans, vehicles, currency, deletePin, onPrin
                   </tr>
                 );
               })}
+              <tr className="net-row">
+                <td colSpan={3}>Total</td>
+                <td className="num">{fmtNum(displayLoans.reduce((s, l) => s + loanAmount(l), 0))}</td>
+                <td className="num">{fmtNum(fleetTotals.monthlyEMI)}</td>
+                <td className="num">{pctStr(fleetPaidPct)}</td>
+                <td className="num">{fmtNum(fleetTotals.principalBalance)}</td>
+                <td className="num">{fmtNum(fleetTotals.interestBalance)}</td>
+                <td></td><td></td>
+              </tr>
             </tbody>
           </table>
           </>
@@ -5370,6 +6130,14 @@ function FleetDataReportPanel({ vehicles, setVehicles, insurancePolicies, setIns
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No vehicles yet.</td></tr>}
+            {rows.length > 0 && (
+              <tr className="net-row">
+                <td colSpan={6}>Total</td>
+                <td className="num">{fmt(rows.reduce((s, r) => s + num(r.premium), 0), currency)}</td>
+                <td className="num">{fmt(rows.reduce((s, r) => s + num(r.monthlyPremium), 0), currency)}</td>
+                <td></td><td></td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -5407,7 +6175,7 @@ function GarageMovementPanel({ vehicles, agreements, garageMovements, setGarageM
   const displayMovements = (filter === 'open' ? garageMovements.filter(m => !m.movementOutDate) : garageMovements)
     .slice().sort((a, b) => (b.movementInDate || '').localeCompare(a.movementInDate || ''));
   const selected = garageMovements.find(m => m.id === selectedId);
-  const vehicleName = (id) => { const v = vehicles.find(x => x.id === id); return v ? `${v.plate} — ${v.name}` : '—'; };
+  const vehicleName = (m) => { const v = m.vehicleId ? vehicles.find(x => x.id === m.vehicleId) : null; if (v) return `${v.plate} — ${v.name}`; if (m.plate) return <span>{m.plate} <span className="badge neg" style={{ marginLeft: 4 }}>Not matched</span></span>; return '—'; };
 
   const statusCounts = vehicles.reduce((acc, v) => {
     const st = vehicleFleetStatus(v, agreements, garageMovements).status;
@@ -5441,7 +6209,7 @@ function GarageMovementPanel({ vehicles, agreements, garageMovements, setGarageM
               {displayMovements.map(m => (
                 <tr key={m.id} style={{ background: m.id === selectedId ? '#EFF4F1' : undefined, cursor: 'pointer' }} onClick={() => setSelectedId(m.id)}>
                   <td>{m.movementNumber || '—'}</td>
-                  <td>{vehicleName(m.vehicleId)}</td>
+                  <td>{vehicleName(m)}</td>
                   <td>{m.garageName || '—'}</td>
                   <td>{m.purpose || '—'}</td>
                   <td>{m.movementInDate ? fullDateLabel(m.movementInDate) : '—'}</td>
@@ -5489,7 +6257,7 @@ function emptyAgreement() {
     id: uid('agr'), raNumber: '', plate: '', vehicleId: '', customerName: '',
     type: 'daily', startDate: todayStr(), closeDate: '', status: 'open',
     rate: '', daysOverride: '', revenueOverride: '',
-    replacementPlate: '', notes: '', parentRaNumber: '',
+    replacementPlate: '', notes: '', parentRaNumber: '', carName: '',
   };
 }
 
@@ -5531,7 +6299,7 @@ function sortAgreements(list, field, dir) {
 // amber=Investor, grey=Sub-Lease (no fleet match, borrowed).
 function agreementVehicleBadge(a, vehicles) {
   const v = a.vehicleId ? vehicles.find(x => x.id === a.vehicleId) : findVehicleByPlate(vehicles, a.plate);
-  if (!v) return { name: '—', badge: <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> };
+  if (!v) return { name: a.carName || '—', badge: <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> };
   if (v.ownershipType === 'investor') return { name: v.name, badge: <span className="badge" style={{ background: '#FFF6E8', color: 'var(--amber)' }}>Investor</span> };
   if (v.ownershipType === 'sublease') return { name: v.name, badge: <span className="badge" style={{ background: '#F2F3F0', color: 'var(--muted)' }}>Sub-Lease</span> };
   return { name: v.name, badge: <span className="badge" style={{ background: '#EFF4F1', color: 'var(--green)' }}>Owned</span> };
@@ -5561,7 +6329,7 @@ function agreementDaysCell(a) {
   return a.type === 'monthly' ? days % 30 : days;
 }
 
-function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin, garageMovements, setGarageMovements, nrmLogs, setNrmLogs }) {
+function AgreementsPanel({ agreements, setAgreements, vehicles, currency, deletePin, garageMovements, setGarageMovements, nrmLogs, setNrmLogs, missingAgreementRefs, setMissingAgreementRefs }) {
   const emptyForm = emptyAgreement();
   const [form, setForm] = useState(emptyForm);
   const [view, setView] = useState('open'); // 'open' | 'closed' | 'void' | 'all' | 'add' | 'import'
@@ -5581,6 +6349,9 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
   // One-by-one paste review: parsed rows sit here for confirm/edit/skip before anything is
   // actually saved, rather than the whole paste committing straight to the system.
   const [reviewQueue, setReviewQueue] = useState(null);
+  // Which replacement chains (keyed by parent RA#) are expanded in the All Agreements view —
+  // collapsed by default so the vehicle-swap legs don't clutter the flat list.
+  const [expandedReplacementChains, setExpandedReplacementChains] = useState({});
   const [reviewIndex, setReviewIndex] = useState(0);
   const [reviewDraft, setReviewDraft] = useState(null);
   const reviewCountsRef = useRef({ added: 0, updated: 0, skipped: 0 });
@@ -5728,12 +6499,13 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       // Matches: Movement No, Type, Ref No, Vehicle, Make and Model, Contact, Date Time Out,
       // Date Time In, Mileage Out, Mileage In, Km Difference, Fuel Level Out, Fuel Level In,
       // closed?, Marks Changed?, Creation Date Time, Created By.
-      const [movementNo, type, refNo, plate, , contact, dateOutRaw, dateInRaw, mileageOut, mileageIn] = cols;
+      const [movementNo, type, refNo, plate, makeModel, contact, dateOutRaw, dateInRaw, mileageOut, mileageIn] = cols;
       return {
         movementNo: (movementNo || '').trim(),
         type: (type || '').trim(),
         refNo: (refNo || '').trim(),
-        plate: (plate || '').trim(),
+        plate: (plate || '').trim().replace(/\s*\([^)]*\)\s*$/, ''),
+        makeModel: (makeModel || '').trim(),
         contact: (contact || '').trim(),
         dateOutRaw, dateInRaw,
         startDate: parseFlexibleDate(dateOutRaw),
@@ -5764,6 +6536,22 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       return { refNo, base: base || null, alreadySplit, legs };
     }).filter(Boolean);
     setMovementsPreview(splits);
+
+    // Any Ref# from the Agreement-type rows with no matching existing agreement at all is a
+    // genuinely missing agreement — surfaced persistently in the Agreements tab, not just
+    // this import screen, since the fix (adding that agreement) may happen much later.
+    const missing = Object.keys(grouped)
+      .filter(refNo => !agreements.some(a => a.raNumber === refNo))
+      .map(refNo => {
+        const legs = grouped[refNo].slice().sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+        return { refNo, plate: legs[0].plate, startDate: legs[0].startDate, makeModel: legs[0].makeModel || '' };
+      });
+    if (missing.length) {
+      setMissingAgreementRefs(prev => {
+        const existingRefs = new Set(prev.map(m => m.refNo));
+        return [...prev, ...missing.filter(m => !existingRefs.has(m.refNo))];
+      });
+    }
 
     // --- Workshop (garage) rows: Contact = Garage Name, parenthetical in Type = Purpose ---
     const existingMovementNos = new Set(garageMovements.map(m => m.importedMovementNo).filter(Boolean));
@@ -5796,11 +6584,27 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     setMovementsNrmPreview(nrmPreview);
   }
 
+  function applyAllMovements() {
+    const hadSplits = movementsPreview.length > 0;
+    const hadGarage = movementsGaragePreview.length > 0;
+    const hadNrm = movementsNrmPreview.length > 0;
+    if (hadSplits) applyMovementSplits({ silent: true });
+    if (hadGarage) applyMovementsGarage();
+    if (hadNrm) applyMovementsNrm();
+    setMovementsText('');
+    const parts = [];
+    if (hadSplits) parts.push('agreement replacement chain(s)');
+    if (hadGarage) parts.push(`${movementsGaragePreview.length} garage movement(s)`);
+    if (hadNrm) parts.push(`${movementsNrmPreview.length} staff usage entrie(s)`);
+    window.alert(parts.length ? `Applied: ${parts.join(', ')}.` : 'Nothing to apply.');
+  }
+
+
   function applyMovementsGarage() {
     const newRecords = movementsGaragePreview.map(g => ({
       id: uid('grg'),
       movementNumber: generateMovementNumber(g.garageName, g.movementInDate),
-      vehicleId: g.vehicleId, garageName: g.garageName, purpose: g.purpose,
+      vehicleId: g.vehicleId, plate: g.plate, garageName: g.garageName, purpose: g.purpose,
       estimatedCost: '', remarks: `Imported from Movements Report (Movement No ${g.movementNo}).`,
       movementInDate: g.movementInDate || todayStr(), movementOutDate: g.movementOutDate,
       importedMovementNo: g.movementNo,
@@ -5811,7 +6615,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
 
   function applyMovementsNrm() {
     const newRecords = movementsNrmPreview.map(n => ({
-      id: uid('nrm'), vehicleId: n.vehicleId, staffName: n.staffName,
+      id: uid('nrm'), vehicleId: n.vehicleId, plate: n.plate, staffName: n.staffName,
       dateOut: n.dateOut || todayStr(), dateIn: n.dateIn,
       mileageOut: n.mileageOut, mileageIn: n.mileageIn,
       importedMovementNo: n.movementNo,
@@ -5820,7 +6624,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     setMovementsNrmPreview([]);
   }
 
-  function applyMovementSplits() {
+  function applyMovementSplits(opts) {
     let next = [...agreements];
     let applied = 0, skipped = 0;
     movementsPreview.forEach(({ refNo, base, alreadySplit, legs }) => {
@@ -5834,6 +6638,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         startDate: firstLeg.startDate || next[baseIdx].startDate,
         closeDate: firstLeg.closeDate || '',
         status: 'replaced',
+        carName: firstVehicle ? next[baseIdx].carName : (firstLeg.makeModel || next[baseIdx].carName),
       };
       legs.slice(1).forEach(leg => {
         const suffix = nextReplacementSuffix(refNo, next);
@@ -5841,7 +6646,7 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         const isLast = leg === legs[legs.length - 1];
         next.push({
           id: uid('agr'), raNumber: `${refNo}-${suffix}`, parentRaNumber: refNo,
-          plate: leg.plate, vehicleId: v ? v.id : '',
+          plate: leg.plate, vehicleId: v ? v.id : '', carName: v ? '' : leg.makeModel,
           customerName: base.customerName, type: base.type,
           startDate: leg.startDate || todayStr(), closeDate: leg.closeDate || '',
           status: isLast && !leg.closeDate ? 'open' : 'closed',
@@ -5853,8 +6658,10 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     });
     setAgreements(next);
     setMovementsPreview([]);
-    setMovementsText('');
-    window.alert(`Applied ${applied} vehicle-swap split(s). ${skipped} skipped (Ref# not found in your agreements, or already split — check Notes on existing legs).`);
+    if (!(opts && opts.silent)) {
+      setMovementsText('');
+      window.alert(`Applied ${applied} vehicle-swap split(s). ${skipped} skipped (Ref# not found in your agreements, or already split — check Notes on existing legs).`);
+    }
   }
 
   function parseBulk() {
@@ -6089,6 +6896,37 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
       )}
 
 
+      {missingAgreementRefs.filter(m => !agreements.some(a => a.raNumber === m.refNo)).length > 0 && (
+        <div className="panel" style={{ borderLeft: '4px solid var(--red)' }}>
+          <h3 style={{ color: 'var(--red)' }}>⚠ Missing Agreements — Referenced in Movements Report, Not Found Here</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>These Ref#s appeared in an imported Movements Report but don't exist in your Agreements yet. Add them manually, or dismiss if not relevant.</p>
+          <table>
+            <thead><tr><th>Ref# (RA#)</th><th>Vehicle Seen</th><th>Date Seen</th><th></th></tr></thead>
+            <tbody>
+              {missingAgreementRefs.filter(m => !agreements.some(a => a.raNumber === m.refNo)).map(m => (
+                <tr key={m.refNo}>
+                  <td>{m.refNo}</td>
+                  <td>{m.plate}{m.makeModel ? ` (${m.makeModel})` : ''}</td>
+                  <td>{m.startDate ? fullDateLabel(m.startDate) : '—'}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button className="btn small" onClick={() => {
+                      const a = emptyAgreement();
+                      a.raNumber = m.refNo; a.plate = m.plate;
+                      if (m.startDate) a.startDate = m.startDate;
+                      const v = findVehicleByPlate(vehicles, m.plate);
+                      if (v) a.vehicleId = v.id; else a.carName = m.makeModel;
+                      setAgreements([...agreements, a]);
+                      setView('all'); startEdit(a);
+                    }}>+ Add Agreement</button>{' '}
+                    <button className="icon-btn" title="Dismiss" onClick={() => setMissingAgreementRefs(missingAgreementRefs.filter(x => x.refNo !== m.refNo))}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="panel">
         <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 0 }}>Rental Agreements drive both Occupancy and Vehicle Income automatically — enter a contract once, and it feeds every report. RA# and Vehicle Plate are the core tracking keys. Cars whose plate isn't in your Vehicles list are automatically treated as Sub-Lease and excluded from your owned-fleet totals.</p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -6209,7 +7047,6 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   ))}
                 </tbody>
               </table>
-              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementSplits}>Apply All Valid Splits</button>
             </div>
           )}
 
@@ -6230,7 +7067,6 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   ))}
                 </tbody>
               </table>
-              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementsGarage}>Add {movementsGaragePreview.length} Garage Movement{movementsGaragePreview.length === 1 ? '' : 's'}</button>
             </div>
           )}
 
@@ -6250,8 +7086,17 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                   ))}
                 </tbody>
               </table>
-              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyMovementsNrm}>Add {movementsNrmPreview.length} Staff Usage Entr{movementsNrmPreview.length === 1 ? 'y' : 'ies'}</button>
             </div>
+          )}
+
+          {(movementsPreview.length > 0 || movementsGaragePreview.length > 0 || movementsNrmPreview.length > 0) && (
+            <button className="btn primary" style={{ marginTop: 14 }} onClick={applyAllMovements}>
+              Apply All {[
+                movementsPreview.length > 0 ? `${movementsPreview.length} Agreement Split${movementsPreview.length === 1 ? '' : 's'}` : '',
+                movementsGaragePreview.length > 0 ? `${movementsGaragePreview.length} Garage Movement${movementsGaragePreview.length === 1 ? '' : 's'}` : '',
+                movementsNrmPreview.length > 0 ? `${movementsNrmPreview.length} Staff Usage Entr${movementsNrmPreview.length === 1 ? 'y' : 'ies'}` : '',
+              ].filter(Boolean).join(' + ')}
+            </button>
           )}
         </div>
       )}
@@ -6348,13 +7193,31 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
         </div>
       )}
 
-      {view === 'all' && (
+      {view === 'all' && (() => {
+        // Group replacement legs directly beneath their parent RA#, collapsed by default,
+        // instead of letting them sort wherever they'd normally land in the flat list.
+        const displayRows = [];
+        const placed = new Set();
+        filtered.forEach(a => {
+          if (a.parentRaNumber) return;
+          displayRows.push(a);
+          placed.add(a.id);
+          const children = filtered.filter(c => c.parentRaNumber === a.raNumber);
+          if (children.length && expandedReplacementChains[a.raNumber]) {
+            children.forEach(c => { displayRows.push(c); placed.add(c.id); });
+          }
+        });
+        // Orphan legs whose parent got filtered out by search/type/ownership — still show
+        // them rather than silently hiding data.
+        filtered.forEach(a => { if (!placed.has(a.id)) displayRows.push(a); });
+
+        return (
         <div className="panel" style={{ overflowX: 'auto' }}>
           <h3 style={{ margin: '0 0 10px' }}>All Agreements</h3>
           <table>
             <thead><tr><th>S.No</th><th>RA#</th><th>Customer</th><th>Plate</th><th>Vehicle</th><th>Type</th><th>Start</th><th>Close</th><th>Status</th><th className="num">Months</th><th className="num">Days</th><th className="num">Rate</th><th className="num">Revenue</th><th></th></tr></thead>
             <tbody>
-              {filtered.map((a, i) => {
+              {displayRows.map((a, i) => {
                 if (editingId === a.id) {
                   return (
                     <tr key={a.id} style={{ background: '#FFF9EC' }}>
@@ -6365,7 +7228,12 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                         <input value={editDraft.plate} onChange={e => setEditDraft({ ...editDraft, plate: e.target.value })} list="fleet-plates-edit" style={{ width: 90 }} />
                         <datalist id="fleet-plates-edit">{vehicles.map(v => <option key={v.id} value={v.plate} />)}</datalist>
                       </td>
-                      <td>{agreementVehicleBadge(editDraft, vehicles).name} {agreementVehicleBadge(editDraft, vehicles).badge}</td>
+                      <td>
+                        {agreementVehicleBadge(editDraft, vehicles).name} {agreementVehicleBadge(editDraft, vehicles).badge}
+                        {!findVehicleByPlate(vehicles, editDraft.plate) && !editDraft.vehicleId && (
+                          <input value={editDraft.carName || ''} onChange={e => setEditDraft({ ...editDraft, carName: e.target.value })} placeholder="Car name (Sub-Lease)" style={{ width: 130, marginTop: 4, display: 'block' }} />
+                        )}
+                      </td>
                       <td>
                         <select value={editDraft.type} onChange={e => setEditDraft({ ...editDraft, type: e.target.value })}>
                           <option value="daily">Daily</option>
@@ -6394,9 +7262,15 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                 }
                 const { name, badge } = agreementVehicleBadge(a, vehicles);
                 return (
-                <tr key={a.id} style={a.status === 'closed' ? { background: '#FAFAF8', color: 'var(--muted)' } : a.status === 'void' ? { background: '#FDEDEC' } : undefined}>
+                <tr key={a.id} style={a.parentRaNumber ? { background: '#F0F4F6' } : a.status === 'closed' ? { background: '#FAFAF8', color: 'var(--muted)' } : a.status === 'void' ? { background: '#FDEDEC' } : undefined}>
                   <td>{i + 1}</td>
-                  <td>{a.raNumber || '—'}{a.parentRaNumber && <span style={{ fontSize: 10.5, color: 'var(--steel)', marginLeft: 4 }} title={`Replacement leg of ${a.parentRaNumber}`}>↳ linked</span>}</td><td>{a.customerName || '—'}</td><td>{a.plate}</td>
+                  <td>
+                    {a.raNumber || '—'}
+                    {!a.parentRaNumber && filtered.some(c => c.parentRaNumber === a.raNumber) && (
+                      <span onClick={() => setExpandedReplacementChains(prev => ({ ...prev, [a.raNumber]: !prev[a.raNumber] }))} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, borderRadius: 3, border: '1px solid var(--line)', marginLeft: 6, cursor: 'pointer', fontSize: 11, lineHeight: 1, color: 'var(--steel)', userSelect: 'none' }} title="Show/hide replacement vehicle(s)">{expandedReplacementChains[a.raNumber] ? '−' : '+'}</span>
+                    )}
+                    {a.parentRaNumber && <span style={{ fontSize: 10.5, color: 'var(--steel)', marginLeft: 4 }} title={`Replacement leg of ${a.parentRaNumber}`}>↳ replaced</span>}
+                  </td><td>{a.customerName || '—'}</td><td>{a.plate}</td>
                   <td>{name} {badge}</td>
                   <td>{agreementTypeBadge(a)}</td>
                   <td>{a.startDate}</td><td>{a.closeDate || '—'}</td>
@@ -6413,11 +7287,12 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
                 </tr>
                 );
               })}
-              {filtered.length === 0 && <tr><td colSpan={14} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
+              {displayRows.length === 0 && <tr><td colSpan={14} style={{ textAlign: 'center', color: 'var(--muted)', padding: 16 }}>No agreements yet.</td></tr>}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -7250,7 +8125,7 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
       {widgets.topModels && topModels.length > 0 && (
         <div className="panel">
           <h3>Top Performing Models</h3>
-          <HBarList data={topModels.map(r => ({ name: r.vehicle.name, value: Math.round((r.stats.coverage || 0) * 100), display: r.stats.coverage === null ? 'No Benchmark' : pctStr(r.stats.coverage), color: (r.stats.coverage || 0) >= 1 ? '#3E9C6E' : (r.stats.coverage || 0) >= 0.8 ? '#D98E3F' : '#C1503F' }))} maxVal={100} />
+          <HBarList data={topModels.map(r => ({ name: `${r.vehicle.plate} — ${r.vehicle.name}`, value: Math.round((r.stats.coverage || 0) * 100), display: r.stats.coverage === null ? 'No Benchmark' : pctStr(r.stats.coverage), color: (r.stats.coverage || 0) >= 1 ? '#3E9C6E' : (r.stats.coverage || 0) >= 0.8 ? '#D98E3F' : '#C1503F' }))} maxVal={100} />
         </div>
       )}
     </div>
@@ -7402,6 +8277,12 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
         )}
       </div>
 
+      <div className="page-break" style={{ pageBreakBefore: 'always' }}></div>
+      <h2 style={{ fontSize: 17, marginTop: 0 }}>Combined P&amp;L Statement</h2>
+      <PnlStatement monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} companyName={companyName} viewMode="both" setViewMode={() => {}} />
+
+      <div className="page-break" style={{ pageBreakBefore: 'always' }}></div>
+      <h2 style={{ fontSize: 17, marginTop: 0 }}>Line-by-Line Comparison</h2>
       <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} />
 
       <div className="panel">
