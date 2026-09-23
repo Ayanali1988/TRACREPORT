@@ -244,10 +244,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-176';
+const APP_VERSION = 'Version 2026-180';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "Sub Lease Vehicles registry now also grows from Agreements (both import and manual edit), not just LPO Records and Rate Card -- a Sub-Lease agreement with a Car Name registers that plate automatically, and typing a known plate back into an Agreement auto-fills its Car Name. All Agreements table now shows a Total row (Days, Revenue) that follows your search/filters -- search a specific plate to see total income from that car over your selected period. Sub Lease Vehicles now blocks duplicate plates with a popup naming the existing entry, instead of silently allowing two records for the same car.";
+const APP_WHATS_NEW = "Core Days calculation changed for Daily-type agreements, applied retroactively across the whole system as confirmed: Days is now counted as full 24-hour periods from pickup (Sep 15 to Sep 22 = 7 days), not inclusive calendar dates (which gave 8). A same-day rental still bills a minimum of 1 day. This changes Days and Revenue for every existing Daily agreement calculated from dates rather than a manual Days Override, so historical P&L and Occupancy figures will shift. The Close modal's own preview calculation had the identical bug and is now fixed to match exactly what gets saved. Monthly-type agreements are unaffected -- their calendar-month day proration is a separate calculation not covered by this fix.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -1780,7 +1780,7 @@ function vehicleFleetStatus(vehicle, agreements, garageMovements, nrmLogs) {
   if (openMovement) return { status: 'garage', movement: openMovement };
   const openNrm = (nrmLogs || []).find(n => n.vehicleId === vehicle.id && n.dateOut && !n.dateIn);
   if (openNrm) return { status: 'staffuse', nrm: openNrm };
-  const openAgreement = (agreements || []).find(a => a.status === 'open' && ((a.vehicleId && a.vehicleId === vehicle.id) || (a.plate || '').trim().toLowerCase() === (vehicle.plate || '').trim().toLowerCase()));
+  const openAgreement = (agreements || []).find(a => a.status === 'open' && ((a.vehicleId && a.vehicleId === vehicle.id) || normalizePlate(a.plate) === normalizePlate(vehicle.plate)));
   if (openAgreement) return { status: 'rented', agreement: openAgreement };
   return { status: 'available' };
 }
@@ -1791,7 +1791,7 @@ function idleDaysSince(vehicle, agreements, occupancy, garageMovements) {
   const candidates = [];
 
   const closed = (agreements || [])
-    .filter(a => a.status === 'closed' && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || (a.plate || '').trim().toLowerCase() === (vehicle.plate || '').trim().toLowerCase()))
+    .filter(a => a.status === 'closed' && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || normalizePlate(a.plate) === normalizePlate(vehicle.plate)))
     .sort((a, b) => (a.closeDate < b.closeDate ? 1 : -1));
   if (closed.length) candidates.push({ lastCloseDate: closed[0].closeDate, source: 'agreement' });
 
@@ -1804,7 +1804,13 @@ function idleDaysSince(vehicle, agreements, occupancy, garageMovements) {
     if (occupiedMonths.length) {
       const [y, m] = occupiedMonths[0].split('-').map(Number);
       const endOfMonth = new Date(y, m, 0);
-      candidates.push({ lastCloseDate: endOfMonth.toISOString().slice(0, 10), source: 'occupancy' });
+      const today = new Date(todayStr());
+      // The current, still-in-progress month already having some occupied days logged
+      // doesn't mean the car stays busy all the way through to month-end — that hasn't
+      // happened yet. Cap the estimate at today so it can never land in the future (which
+      // was producing negative "idle days").
+      const estimatedDate = endOfMonth > today ? today : endOfMonth;
+      candidates.push({ lastCloseDate: estimatedDate.toISOString().slice(0, 10), source: 'occupancy' });
     }
   }
 
@@ -1832,9 +1838,18 @@ function lastGarageStay(vehicle, garageMovements) {
   return { days, inDate: m.movementInDate, outDate: m.movementOutDate };
 }
 
+// Strips a trailing parenthetical suffix like " (N)" or " (ii)" — some vehicles in the fleet
+// have these baked into their stored plate (used to disambiguate a reissued/duplicate plate),
+// but incoming data from Agreements, Movements Reports, etc. almost never includes that
+// suffix. Without normalizing it away, plate-matching silently fails for those specific
+// vehicles — the car reads as "not in fleet" everywhere, breaking idle-day tracking, fleet
+// status, and Sub-Lease detection for exactly the cars that most need a disambiguating plate.
+function normalizePlate(plate) {
+  return (plate || '').trim().replace(/\s*\([^)]*\)\s*$/, '').toLowerCase();
+}
 function findVehicleByPlate(vehicles, plate) {
-  const norm = (plate || '').trim().toLowerCase();
-  return vehicles.find(v => (v.plate || '').trim().toLowerCase() === norm);
+  const norm = normalizePlate(plate);
+  return vehicles.find(v => normalizePlate(v.plate) === norm);
 }
 
 // Registration and Insurance expiry alerts, shared by the app-wide banner and Fleet Data
@@ -1879,8 +1894,15 @@ function agreementTotalDays(agreement) {
   if (!agreement.startDate) return 0;
   const start = new Date(agreement.startDate);
   const end = new Date(agreementEffectiveEnd(agreement));
-  const days = Math.round((end - start) / 86400000) + 1;
-  return Math.max(0, days);
+  // Counted as full 24-hour periods from pickup, not inclusive calendar dates — a car picked
+  // up on the 15th and returned on the 22nd is 7 days (the 16th completes day 1, the 22nd
+  // completes day 7), not 8. Matches the same logic already used for time-aware closing.
+  const days = Math.round((end - start) / 86400000);
+  // A closed (or replaced) contract that started and ended the same calendar day is still a
+  // real day of use — billed as a minimum of 1 day, never 0. A still-open contract that
+  // started today legitimately shows 0 days so far, since nothing has completed yet.
+  const isFinal = agreement.status === 'closed' || agreement.status === 'replaced';
+  return isFinal ? Math.max(1, days) : Math.max(0, days);
 }
 
 function agreementDailyRate(agreement) {
@@ -2295,7 +2317,8 @@ function DonutGauge({ pct, size = 150, color = '#2D6E8E' }) {
   );
 }
 
-function vehicleUsefulLife(v, defaultUsefulLife) {
+function vehicleUsefulLife(v, defaultUsefulLife, forceGlobal) {
+  if (forceGlobal) return num(defaultUsefulLife) || 4;
   const override = num(v.usefulLifeOverride);
   return override > 0 ? override : num(defaultUsefulLife) || 4;
 }
@@ -2330,23 +2353,23 @@ function depreciationSchedule(vehicle, defaultUsefulLife) {
   }
   return rows;
 }
-function requiredMonthlyIncome(v, defaultUsefulLife) {
-  const life = vehicleUsefulLife(v, defaultUsefulLife);
+function requiredMonthlyIncome(v, defaultUsefulLife, forceGlobal) {
+  const life = vehicleUsefulLife(v, defaultUsefulLife, forceGlobal);
   const pv = num(v.purchaseValue);
   return life > 0 ? pv / (life * 12) : 0;
 }
-function vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) {
+function vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife, forceGlobal) {
   let total = 0, monthsWithData = 0;
   rangeMonths.forEach(p => {
     const val = (vehicleRevenue[p] || {})[v.id];
     if (val !== undefined && val !== '') { total += num(val); monthsWithData++; }
   });
   const avgMonthly = monthsWithData ? total / monthsWithData : 0;
-  const required = requiredMonthlyIncome(v, defaultUsefulLife);
+  const required = requiredMonthlyIncome(v, defaultUsefulLife, forceGlobal);
   const coverage = required > 0 ? avgMonthly / required : null;
   let verdict = 'No Benchmark';
   if (coverage !== null) verdict = coverage >= 1 ? 'Good' : coverage >= 0.8 ? 'Marginal' : 'Underperforming';
-  return { total, monthsWithData, avgMonthly, required, coverage, verdict, usefulLife: vehicleUsefulLife(v, defaultUsefulLife) };
+  return { total, monthsWithData, avgMonthly, required, coverage, verdict, usefulLife: vehicleUsefulLife(v, defaultUsefulLife, forceGlobal) };
 }
 
 function vehicleLifetimeStats(v, vehicleRevenue) {
@@ -5581,7 +5604,9 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
     const point = { label: monthLabel(p) };
     categoryList.forEach(cat => {
       const vals = categories[cat.name].map(r => r.monthPcts[mi]).filter(x => x !== null);
-      point[cat.name] = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) * 100 : 0;
+      // Total occupied days that month, across every vehicle in the category — a concrete,
+      // actionable number, rather than an averaged percentage that reads as an abstract score.
+      point[cat.name] = vals.reduce((s, pct) => s + pct * baseDays, 0);
     });
     return point;
   });
@@ -5696,10 +5721,10 @@ function OccReport({ monthKeys, vehicles, occupancy, baseDays, agreements, curre
       )}
 
       <div className="panel">
-        <h3>Occupancy by Category {monthKeys.length > 1 ? '— Trend' : `— ${monthLabel(monthKeys[0])}`}</h3>
+        <h3>Occupied Days by Category {monthKeys.length > 1 ? '— Trend' : `— ${monthLabel(monthKeys[0])}`}</h3>
         {monthKeys.length > 1 ? (
           <>
-            <LineTrendSVG data={categoryTrendData} series={categoryList.map(cat => ({ key: cat.name, label: cat.name, color: cat.color }))} axisMax={pctAxisMax(Math.max(...categoryTrendData.flatMap(d => categoryList.map(c => d[c.name] || 0))))} />
+            <LineTrendSVG data={categoryTrendData} series={categoryList.map(cat => ({ key: cat.name, label: cat.name, color: cat.color }))} axisMax={niceAxisMax(Math.max(1, ...categoryTrendData.flatMap(d => categoryList.map(c => d[c.name] || 0))))} />
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 8 }}>
               {categoryList.map(cat => <span key={cat.name} style={{ marginRight: 12 }}>■ <span style={{ color: cat.color }}>{cat.name}</span></span>)}
             </div>
@@ -5862,6 +5887,11 @@ function VehRevenueEntry({ monthKeys, vehicles, vehicleRevenue, setVehicleRevenu
 function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefulLife, setDefaultUsefulLife, currency, reportFrom, setReportFrom, reportTo, setReportTo }) {
   const [groupBy, setGroupBy] = useState('model'); // 'model' | 'category'
   const [selectedIds, setSelectedIds] = useState([]); // empty = all vehicles included
+  // Off by default — real per-vehicle Useful Life Overrides (set deliberately in the Vehicles
+  // tab) always win over the global assumption. Switching this on is a "what-if" scenario:
+  // apply one uniform Useful Life to every vehicle here, ignoring overrides, without touching
+  // or losing the actual override values themselves.
+  const [forceGlobalLife, setForceGlobalLife] = useState(false);
   function toggleSelect(id) {
     setSelectedIds(prev => {
       if (prev.length === 0) return [id];
@@ -5879,8 +5909,8 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
   }, [vehicles]);
   const displayVehicles = selectedIds.length ? vehicles.filter(v => selectedIds.includes(v.id)) : vehicles;
 
-  const unitStats = useMemo(() => displayVehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife) }))
-    .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [displayVehicles, rangeMonths, vehicleRevenue, defaultUsefulLife]);
+  const unitStats = useMemo(() => displayVehicles.map(v => ({ vehicle: v, stats: vehicleRoiStats(v, rangeMonths, vehicleRevenue, defaultUsefulLife, forceGlobalLife) }))
+    .sort((a, b) => a.vehicle.name.localeCompare(b.vehicle.name) || a.vehicle.plate.localeCompare(b.vehicle.plate)), [displayVehicles, rangeMonths, vehicleRevenue, defaultUsefulLife, forceGlobalLife]);
 
   const groupKeyFor = (v) => groupBy === 'category' ? ((v.category && v.category.trim()) || 'Uncategorized') : v.name;
 
@@ -5939,6 +5969,13 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
           <input type="number" min="1" value={defaultUsefulLife} onChange={e => setDefaultUsefulLife(Math.max(1, num(e.target.value) || 4))} style={{ width: 70, border: '1px solid var(--line)', borderRadius: 6, padding: '5px 8px' }} />
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>years (custom)</span>
         </div>
+        <label className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12.5, color: 'var(--ink)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={forceGlobalLife} onChange={e => setForceGlobalLife(e.target.checked)} />
+          Apply this to all vehicles (ignore individual Useful Life Overrides) — a what-if scenario only; your actual overrides in the Vehicles tab are never changed.
+        </label>
+        {!forceGlobalLife && unitStats.some(u => num(u.vehicle.usefulLifeOverride) > 0) && (
+          <p style={{ fontSize: 11.5, color: 'var(--amber)', margin: '8px 0 0' }}>⚠ {unitStats.filter(u => num(u.vehicle.usefulLifeOverride) > 0).length} of {unitStats.length} vehicles shown have their own override set, so changing the years above won't affect them unless you turn this on.</p>
+        )}
       </div>
 
       <div className="panel">
@@ -6009,7 +6046,7 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
                 <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 3, background: vehicle.color ? carColorHex(vehicle.color) : '#e5e5e5', border: '1px solid var(--line)' }} />{vehicle.color || ''}</span></td>
                 <td>{vehicle.name}</td><td>{vehicle.plate}</td><td>{vehicle.category || '—'}</td>
                 <td className="num">{vehicle.purchaseValue ? fmt(vehicle.purchaseValue, currency) : '—'}</td>
-                <td className="num">{stats.usefulLife} yrs{num(vehicle.usefulLifeOverride) > 0 ? <span className="badge neg" style={{ marginLeft: 5, fontSize: 10 }}>override</span> : null}</td>
+                <td className="num">{stats.usefulLife} yrs{(!forceGlobalLife && num(vehicle.usefulLifeOverride) > 0) ? <span className="badge neg" style={{ marginLeft: 5, fontSize: 10 }}>override</span> : null}</td>
                 <td className="num">{fmt(stats.avgMonthly, currency)}</td>
                 <td className="num">{stats.required ? fmt(stats.required, currency) : '—'}</td>
                 <td className="num">{stats.coverage === null ? '—' : pctStr(stats.coverage)}</td>
@@ -7737,7 +7774,9 @@ function AgreementsPanel({ agreements, setAgreements, vehicles, currency, delete
     }
     const start = new Date(closingAgreement.startDate);
     const end = new Date(closeDateInput);
-    return Math.max(0, Math.round((end - start) / 86400000) + 1);
+    // Same exclusive 24-hour-period counting as agreementTotalDays — a same-day close still
+    // bills a minimum of 1 day.
+    return Math.max(1, Math.round((end - start) / 86400000));
   })() : 0;
   const previewDays = closeDaysInput !== '' ? num(closeDaysInput) : previewDaysReal;
   const previewRate = closeRateInput !== '' ? num(closeRateInput) : (closingAgreement ? num(closingAgreement.rate) : 0);
@@ -8846,7 +8885,7 @@ function InsurancePanel({ policies, setPolicies, vehicles, setVehicles, currency
       // Start, Insurance Expiry, Insured Value, Premium.
       const [, , modelYear, plate, regExpiry, insStart, insExpiry, insuredValue, premium] = cols;
       if (!plate) return;
-      const vIdx = nextVehicles.findIndex(v => (v.plate || '').trim().toLowerCase() === plate.trim().toLowerCase());
+      const vIdx = nextVehicles.findIndex(v => normalizePlate(v.plate) === normalizePlate(plate));
       if (vIdx < 0) { notFound.push(plate); return; }
       // Plate is the core tracking key — vehicle Model Year and Registration Expiry get
       // refreshed from this sheet since it's treated as the authoritative source.
