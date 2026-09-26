@@ -245,10 +245,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-183';
+const APP_VERSION = 'Version 2026-184';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "Feasibility Study: three new presentation-quality charts (gradient fills, insight callouts) -- Market Revenue vs Required by Year, a Break-Even Outlook showing cumulative revenue crossing the required line, and an Occupancy Sensitivity comparison -- all included in both the live view and PDF export. New: Investor Budget Planner -- enter a foreign-currency budget (e.g. $2,000,000) and an exchange rate, and see how many units of each saved study's vehicle that budget affords, ranked by projected fleet-wide market revenue, with a Best Fit indicator.";
+const APP_WHATS_NEW = "URGENT FIX: v182/183 introduced a site-breaking bug -- a scoping mistake left over from the Occupancy auto-derivation work referenced a variable that did not exist inside FullReport, which is the default print-mode fallback rendered on every single page load (hidden by CSS, but still executed by React). This crashed the entire app to a blank white screen for everyone, immediately on load, not just when printing. Fixed and verified.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -10393,7 +10393,7 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
 
   return (
     <div style={{ padding: 24 }}>
-      <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />
+      <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
       <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h1 style={{ fontSize: 22 }}>{companyName}</h1>
       <p style={{ color: 'var(--muted)', marginTop: 4 }}>Budget vs Actual &amp; Occupancy Report · {periodRangeLabel(rangeMonths)}</p>
