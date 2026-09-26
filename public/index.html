@@ -80,6 +80,7 @@
   tr.net-row td { font-weight:700; background:#EFF4F1; color:var(--steel); font-size:13.5px; }
   tr.income-row td { background:#EEF6F1; }
   .num { font-family:'Roboto Mono',monospace; text-align:right; font-variant-numeric:tabular-nums; }
+  td.num input[type="number"], td.num input[type="text"] { width:100%; box-sizing:border-box; text-align:right; font-family:'Roboto Mono',monospace; border:1px solid var(--line); border-radius:5px; padding:5px 7px; font-size:inherit; }
   td input { width:88px; border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; box-sizing:border-box; font-family:'Roboto Mono',monospace; text-align:right; }
   .badge { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; border-radius:20px; font-size:11px; font-weight:600; }
   @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.45; } }
@@ -114,7 +115,7 @@
     .print-only { display:block !important; }
     body { background:#fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; color-adjust: exact; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
-    .app { display:block; }
+    .app { display:block; height:auto; overflow:visible; }
     .print-only table { border-collapse: collapse; width: 100%; font-size: 10.5px; }
     .print-only table th, .print-only table td { border: 1px solid #ccc !important; padding: 3px 6px !important; line-height: 1.2; }
     .print-only .panel { border: none; box-shadow: none; padding: 6px 0; margin-bottom: 8px !important; }
@@ -244,10 +245,10 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 // Bump this one string for every new production build — shows in the browser tab, the
 // login screen, and the sidebar footer, so it's always obvious which build is live.
 const APP_NAME = 'Thomson Reporting System';
-const APP_VERSION = 'Version 2026-180';
+const APP_VERSION = 'Version 2026-183';
 // One-line summary of what's actually new in this version — update this alongside
 // APP_VERSION every time a new feature (not just a small fix) ships.
-const APP_WHATS_NEW = "Core Days calculation changed for Daily-type agreements, applied retroactively across the whole system as confirmed: Days is now counted as full 24-hour periods from pickup (Sep 15 to Sep 22 = 7 days), not inclusive calendar dates (which gave 8). A same-day rental still bills a minimum of 1 day. This changes Days and Revenue for every existing Daily agreement calculated from dates rather than a manual Days Override, so historical P&L and Occupancy figures will shift. The Close modal's own preview calculation had the identical bug and is now fixed to match exactly what gets saved. Monthly-type agreements are unaffected -- their calendar-month day proration is a separate calculation not covered by this fix.";
+const APP_WHATS_NEW = "Feasibility Study: three new presentation-quality charts (gradient fills, insight callouts) -- Market Revenue vs Required by Year, a Break-Even Outlook showing cumulative revenue crossing the required line, and an Occupancy Sensitivity comparison -- all included in both the live view and PDF export. New: Investor Budget Planner -- enter a foreign-currency budget (e.g. $2,000,000) and an exchange rate, and see how many units of each saved study's vehicle that budget affords, ranked by projected fleet-wide market revenue, with a Best Fit indicator.";
 function periodsBetween(from, to) {
   if (!from || !to || from > to) return [];
   const result = [];
@@ -738,7 +739,7 @@ function SubLeaseSectionPanel({ vehicleTypes, setVehicleTypes, subLeaseSuppliers
       </div>
 
       {tab === 'records' && (
-        <LpoRecordsSubPanel lpoRecords={lpoRecords} setLpoRecords={setLpoRecords} vehicleTypes={vehicleTypes} subLeaseSuppliers={subLeaseSuppliers} subLeaseVehicles={subLeaseVehicles} setSubLeaseVehicles={setSubLeaseVehicles} companyName={companyName} logoDataUrl={logoDataUrl} deletePin={deletePin} />
+        <LpoRecordsSubPanel lpoRecords={lpoRecords} setLpoRecords={setLpoRecords} vehicleTypes={vehicleTypes} setVehicleTypes={setVehicleTypes} subLeaseSuppliers={subLeaseSuppliers} setSubLeaseSuppliers={setSubLeaseSuppliers} subLeaseVehicles={subLeaseVehicles} setSubLeaseVehicles={setSubLeaseVehicles} companyName={companyName} logoDataUrl={logoDataUrl} deletePin={deletePin} />
       )}
       {tab === 'ratecard' && (
         <SupplierRateCardSubPanel rateCardEntries={rateCardEntries} setRateCardEntries={setRateCardEntries} subLeaseSuppliers={subLeaseSuppliers} setSubLeaseSuppliers={setSubLeaseSuppliers} subLeaseVehicles={subLeaseVehicles} setSubLeaseVehicles={setSubLeaseVehicles} vehicleTypes={vehicleTypes} setVehicleTypes={setVehicleTypes} deletePin={deletePin} />
@@ -1160,7 +1161,35 @@ function SubLeaseVehiclesSubPanel({ subLeaseVehicles, setSubLeaseVehicles, vehic
 // LPO Records — the actual transactions. Search/filter bar matches the live Records page:
 // Supplier, Vehicle Type, Plate No search, Reset. Save/Edit lock workflow per record, plus a
 // printable LPO document matching the real PDF layout.
-function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, subLeaseSuppliers, subLeaseVehicles, setSubLeaseVehicles, companyName, logoDataUrl, deletePin }) {
+// LPO Records bulk import — header-matched (not fixed position), same approach as Rate Card
+// and Agreements import, for loading old/historical LPO data without one-at-a-time entry.
+function parseLpoImportRows(headerRow, dataRows) {
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const idx = {};
+  headerRow.forEach((h, i) => { idx[norm(h)] = i; });
+  const col = (row, ...names) => { for (const n of names) { if (idx[n] !== undefined) return row[idx[n]]; } return ''; };
+  return dataRows
+    .filter(row => row.some(c => String(c || '').trim() !== ''))
+    .map(row => {
+      const rateText = col(row, 'price', 'rate');
+      const { rate, taxType } = parseRateText(rateText);
+      return {
+        lpoNumber: String(col(row, 'lpo#', 'lpo #', 'lpo no', 'lpo number', 'ref') || '').trim(),
+        date: parseFlexibleDate(col(row, 'lpo creation date', 'date', 'creation date')) || '',
+        plate: String(col(row, 'plate', 'plate#', 'plate no') || '').trim(),
+        carName: String(col(row, 'car/model', 'car / model', 'car', 'model', 'vehicle type') || '').trim(),
+        color: String(col(row, 'color', 'colour') || '').trim(),
+        rate, taxType,
+        officeName: String(col(row, 'supplier', 'office name', 'supplier name') || '').trim(),
+        days: String(col(row, 'no of days', 'days') || '').trim(),
+        deliveryDate: parseFlexibleDate(col(row, 'date required', 'delivery date')) || '',
+        deliveryTime: String(col(row, 'time', 'delivery time') || '').trim(),
+      };
+    })
+    .filter(r => r.lpoNumber || r.plate);
+}
+
+function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, setVehicleTypes, subLeaseSuppliers, setSubLeaseSuppliers, subLeaseVehicles, setSubLeaseVehicles, companyName, logoDataUrl, deletePin }) {
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterPlate, setFilterPlate] = useState('');
@@ -1169,6 +1198,10 @@ function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, subLeaseS
   const [draft, setDraft] = useState(null);
   const [printingId, setPrintingId] = useState(null);
   const [printVariant, setPrintVariant] = useState('standard'); // 'standard' | 'letterhead'
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importPreview, setImportPreview] = useState([]);
+  const [importFileName, setImportFileName] = useState('');
 
   function addRecord() {
     const r = emptyLpoRecord();
@@ -1202,6 +1235,71 @@ function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, subLeaseS
     if (!confirmDelete(r.lpoNumber || 'this LPO record', deletePin)) return;
     setLpoRecords(lpoRecords.filter(x => x.id !== r.id));
     if (selectedId === r.id) { setSelectedId(null); setDraft(null); setEditingRecord(false); }
+  }
+
+  // Shared by paste and file import — resolves/creates a Supplier and Vehicle Type for each
+  // row, then stages everything for review before anything actually saves.
+  function analyzeRows(headerRow, dataRows) {
+    setImportPreview(parseLpoImportRows(headerRow, dataRows));
+  }
+  function analyzePaste() {
+    const lines = importText.trim().split('\n').map(l => l.split('\t'));
+    if (lines.length < 2) { window.alert('Paste the header row plus at least one data row.'); return; }
+    analyzeRows(lines[0], lines.slice(1));
+  }
+  function handleFileUpload(file) {
+    if (!file) return;
+    setImportFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = new Uint8Array(evt.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const first = wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[first], { header: 1, raw: false, defval: '' });
+      if (rows.length < 2) { window.alert('That sheet has no data rows.'); return; }
+      analyzeRows(rows[0], rows.slice(1));
+    };
+    reader.readAsArrayBuffer(file);
+  }
+  function applyImport() {
+    let suppliers = [...subLeaseSuppliers];
+    let types = [...vehicleTypes];
+    let vehicles = [...subLeaseVehicles];
+    const findOrCreateSupplier = (name) => {
+      if (!name) return '';
+      const existing = suppliers.find(s => s.name.trim().toLowerCase() === name.trim().toLowerCase());
+      if (existing) return existing.id;
+      const created = { id: uid('sls'), name: name.trim() };
+      suppliers.push(created);
+      return created.id;
+    };
+    const findOrCreateType = (name) => {
+      if (!name) return '';
+      const existing = types.find(t => t.name.trim().toLowerCase() === name.trim().toLowerCase());
+      if (existing) return existing.id;
+      const created = { id: uid('vt'), name: name.trim(), model: '' };
+      types.push(created);
+      return created.id;
+    };
+    const newRecords = importPreview.map(r => {
+      const supplierId = findOrCreateSupplier(r.officeName);
+      const vehicleTypeId = findOrCreateType(r.carName);
+      // Grows the Sub Lease Vehicles registry the same way manual entry and LPO save already
+      // do — a plate seen here for the first time is registered for future auto-fill.
+      if (r.plate) growSubLeaseVehicleRegistry(r.plate, { vehicleTypeId, model: '', color: r.color, supplierId }, vehicles, (updated) => { vehicles = updated; });
+      return {
+        id: uid('lpo'), lpoNumber: r.lpoNumber || nextLpoNumber(lpoRecords, r.date || todayStr()),
+        date: r.date, supplierId, vehicleTypeId, plate: r.plate, model: '', color: r.color,
+        rate: r.rate, taxType: r.taxType, days: r.days, extendable: false,
+        deliveryDate: r.deliveryDate, deliveryTime: r.deliveryTime, deliveryLocation: '', notes: '',
+      };
+    });
+    setSubLeaseSuppliers(suppliers);
+    setVehicleTypes(types);
+    setSubLeaseVehicles(vehicles);
+    setLpoRecords([...lpoRecords, ...newRecords]);
+    setImportPreview([]); setImportText(''); setImportFileName(''); setShowImport(false);
+    window.alert(`Added ${newRecords.length} LPO record${newRecords.length === 1 ? '' : 's'}.`);
   }
 
   const filtered = lpoRecords.filter(r =>
@@ -1268,7 +1366,10 @@ function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, subLeaseS
       <div className="panel no-print">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0 }}>Manage Records</h3>
-          <button className="btn primary" onClick={addRecord}>+ Add New Record</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn" onClick={() => setShowImport(!showImport)}>{showImport ? 'Close Import' : '📥 Import'}</button>
+            <button className="btn primary" onClick={addRecord}>+ Add New Record</button>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div className="field" style={{ flex: '1 1 180px' }}><label>Supplier</label>
@@ -1287,6 +1388,40 @@ function LpoRecordsSubPanel({ lpoRecords, setLpoRecords, vehicleTypes, subLeaseS
           <button className="btn" onClick={() => { setFilterSupplier(''); setFilterType(''); setFilterPlate(''); }}>Reset</button>
         </div>
       </div>
+
+      {showImport && (
+        <div className="panel">
+          <h3>Import LPO Records</h3>
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: -6 }}>Upload an Excel file directly, or paste rows copied from a sheet (include the header row either way). Expected columns: LPO#, LPO Creation Date, Plate, Car/Model, Color, Price, Supplier, No of Days, Date Required, Time. New Suppliers and Vehicle Types are created automatically, and new plates are added to the Sub Lease Vehicles registry.</p>
+          <div className="field"><label>Upload Excel File</label><input type="file" accept=".xlsx,.xls,.csv" onChange={e => handleFileUpload(e.target.files[0])} /></div>
+          {importFileName && <p style={{ fontSize: 12, color: 'var(--muted)' }}>Loaded: {importFileName}</p>}
+          <div className="field" style={{ marginTop: 10 }}><label>Or Paste Rows (with header row)</label>
+            <textarea rows={5} value={importText} onChange={e => setImportText(e.target.value)} style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }} placeholder="LPO#	LPO Creation Date	Plate	Car/Model	Color	Price	Supplier	No of Days	Date Required	Time" />
+          </div>
+          {importText && <button className="btn" style={{ marginTop: 8 }} onClick={analyzePaste}>Analyze Pasted Rows ▶</button>}
+
+          {importPreview.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <h3>Preview ({importPreview.length} row{importPreview.length === 1 ? '' : 's'})</h3>
+              <div style={{ overflowX: 'auto', maxHeight: 320, overflowY: 'auto' }}>
+                <table>
+                  <thead><tr><th>LPO#</th><th>Date</th><th>Plate</th><th>Car/Model</th><th>Color</th><th>Rate</th><th>Supplier</th><th>Days</th><th>Date Required</th><th>Time</th></tr></thead>
+                  <tbody>
+                    {importPreview.map((r, i) => (
+                      <tr key={i}>
+                        <td>{r.lpoNumber || '—'}</td><td>{r.date || '—'}</td><td>{r.plate || '—'}</td><td>{r.carName || '—'}</td>
+                        <td>{r.color || '—'}</td><td>{r.rate ? `${r.rate} (${r.taxType === 'included' ? 'Incl' : 'VAT'})` : '—'}</td>
+                        <td>{r.officeName || '—'}</td><td>{r.days || '—'}</td><td>{r.deliveryDate || '—'}</td><td>{r.deliveryTime || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button className="btn primary" style={{ marginTop: 10 }} onClick={applyImport}>Add {importPreview.length} Records</button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="panel">
         {filtered.length === 0 ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No LPO records match.</p> : (
@@ -1790,16 +1925,26 @@ function vehicleFleetStatus(vehicle, agreements, garageMovements, nrmLogs) {
 function idleDaysSince(vehicle, agreements, occupancy, garageMovements) {
   const candidates = [];
 
+  // A "replaced" agreement (the original leg of a vehicle-swap chain) is just as valid a
+  // close date as a plain "closed" one for this purpose — the vehicle genuinely left that
+  // contract on its closeDate either way.
   const closed = (agreements || [])
-    .filter(a => a.status === 'closed' && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || normalizePlate(a.plate) === normalizePlate(vehicle.plate)))
+    .filter(a => (a.status === 'closed' || a.status === 'replaced') && a.closeDate && ((a.vehicleId && a.vehicleId === vehicle.id) || normalizePlate(a.plate) === normalizePlate(vehicle.plate)))
     .sort((a, b) => (a.closeDate < b.closeDate ? 1 : -1));
   if (closed.length) candidates.push({ lastCloseDate: closed[0].closeDate, source: 'agreement' });
 
-  // Fallback for vehicles whose rental history is tracked via manual Occupancy Entry rather
-  // than Agreements — find the most recent month with any occupied days logged, and treat
-  // the last day of that month as the last-rented date (approximate, since Occupancy Entry
-  // only records a day count per month, not exact dates).
-  if (occupancy) {
+  // A vehicle released from the garage more recently than its last rental wasn't actually
+  // idle during that garage stay — the garage release date should win if it's the latest.
+  const closedGarage = (garageMovements || [])
+    .filter(m => m.vehicleId === vehicle.id && m.movementOutDate)
+    .sort((a, b) => (a.movementOutDate < b.movementOutDate ? 1 : -1));
+  if (closedGarage.length) candidates.push({ lastCloseDate: closedGarage[0].movementOutDate, source: 'garage' });
+
+  // Occupancy Entry is only ever a rough, month-level approximation — never an exact date.
+  // It must never be allowed to outrank a real Agreement or Garage record just because it
+  // happens to compute a more recent-looking date (which it easily can, since it's capped at
+  // today). It's used only when there's genuinely no Agreement or Garage data at all.
+  if (!candidates.length && occupancy) {
     const occupiedMonths = Object.keys(occupancy).filter(p => num((occupancy[p] || {})[vehicle.id]) > 0).sort().reverse();
     if (occupiedMonths.length) {
       const [y, m] = occupiedMonths[0].split('-').map(Number);
@@ -1813,13 +1958,6 @@ function idleDaysSince(vehicle, agreements, occupancy, garageMovements) {
       candidates.push({ lastCloseDate: estimatedDate.toISOString().slice(0, 10), source: 'occupancy' });
     }
   }
-
-  // A vehicle released from the garage more recently than its last rental wasn't actually
-  // idle during that garage stay — the garage release date should win if it's the latest.
-  const closedGarage = (garageMovements || [])
-    .filter(m => m.vehicleId === vehicle.id && m.movementOutDate)
-    .sort((a, b) => (a.movementOutDate < b.movementOutDate ? 1 : -1));
-  if (closedGarage.length) candidates.push({ lastCloseDate: closedGarage[0].movementOutDate, source: 'garage' });
 
   if (!candidates.length) return null;
   const latest = candidates.sort((a, b) => (a.lastCloseDate < b.lastCloseDate ? 1 : -1))[0];
@@ -1925,11 +2063,11 @@ function agreementDaysInMonth(agreement, period) {
   const monthEnd = new Date(y, m, 0);
   const start = new Date(agreement.startDate);
   const end = new Date(agreementEffectiveEnd(agreement));
-  const rangeStart = start > monthStart ? start : monthStart;
-  const rangeEnd = end < monthEnd ? end : monthEnd;
-  if (rangeEnd < rangeStart) return 0;
 
   if (agreement.type === 'monthly') {
+    const rangeStart = start > monthStart ? start : monthStart;
+    const rangeEnd = end < monthEnd ? end : monthEnd;
+    if (rangeEnd < rangeStart) return 0;
     // Standardized 30-day-month convention (matches how the monthly Rate itself is
     // quoted): a full calendar month always counts as exactly 30 days, regardless of
     // whether the real month has 28-31 days. A partial month (the agreement's first or
@@ -1940,7 +2078,30 @@ function agreementDaysInMonth(agreement, period) {
     const endDay = Math.min(rangeEnd.getDate(), 30);
     return Math.max(0, endDay - startDay + 1);
   }
-  return Math.round((rangeEnd - rangeStart) / 86400000) + 1;
+
+  // Daily-type: day N of the rental completes on (start + N calendar days) — the pickup day
+  // itself is day 0, not a completed day. So this counts calendar dates in the SHIFTED range
+  // [start+1, start+totalDays] that fall within this month, rather than naively clamping the
+  // raw [start, end] range to the month boundary — clamping loses exactly one day at whichever
+  // boundary a multi-month agreement crosses. Matches agreementTotalDays exactly: e.g. an
+  // agreement running 28 Aug to 5 Sep (8 days total) splits as 3 days in August, 5 in
+  // September — the totals across every month an agreement spans always add up to its real
+  // total, whereas naive clamping would have given 3 and 4.
+  const rawDays = Math.round((end - start) / 86400000);
+  const totalDays = agreementTotalDays(agreement);
+  if (totalDays <= 0) return 0;
+  if (rawDays <= 0) {
+    // A same-day (or otherwise non-positive raw range) rental still bills a minimum of 1 day
+    // via agreementTotalDays — that day happened on the pickup date itself, so it's
+    // attributed directly to the pickup date's month rather than the day after.
+    return (start >= monthStart && start <= monthEnd) ? 1 : 0;
+  }
+  const rangeStartRaw = new Date(start); rangeStartRaw.setDate(rangeStartRaw.getDate() + 1);
+  const rangeEndRaw = new Date(start); rangeEndRaw.setDate(rangeEndRaw.getDate() + totalDays);
+  const rangeStart = rangeStartRaw > monthStart ? rangeStartRaw : monthStart;
+  const rangeEnd = rangeEndRaw < monthEnd ? rangeEndRaw : monthEnd;
+  if (rangeEnd < rangeStart) return 0;
+  return Math.max(0, Math.round((rangeEnd - rangeStart) / 86400000) + 1);
 }
 
 function agreementMonthsSpanned(agreement) {
@@ -2891,6 +3052,38 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [dashboardWidgets, setDashboardWidgets] = useState({ netProfit: true, totalRevenue: true, occupancy: true, fleetStatus: true, topModels: true, budgetVsActual: true, alerts: true });
   const [agreements, setAgreements] = useState([]);
+  // Occupancy Report should always reconcile with Agreements for the same vehicle and month,
+  // rather than drift out of sync with a separately-typed manual number. For each vehicle and
+  // month, if any Agreement overlaps that month, its Agreement-derived day count is used
+  // instead of the manually-entered figure; only months genuinely uncovered by any Agreement
+  // fall back to manual Occupancy Entry. The raw `occupancy` state itself is never modified by
+  // this — manual entries stay intact and editable, this is a computed, read-only merge used
+  // wherever occupancy is reported.
+  const effectiveOccupancy = useMemo(() => {
+    const merged = {};
+    Object.keys(occupancy).forEach(period => { merged[period] = { ...occupancy[period] }; });
+    vehicles.forEach(v => {
+      const ownAgreements = agreements.filter(a => a.startDate && (a.vehicleId === v.id || normalizePlate(a.plate) === normalizePlate(v.plate)));
+      if (!ownAgreements.length) return; // no Agreement history at all — leave manual entries as-is
+      const periodsToCheck = new Set(Object.keys(occupancy));
+      ownAgreements.forEach(a => agreementMonthsSpanned(a).forEach(p => periodsToCheck.add(p)));
+      periodsToCheck.forEach(period => {
+        const [y, m] = period.split('-').map(Number);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        const overlapping = ownAgreements.filter(a => {
+          const start = new Date(a.startDate);
+          const end = new Date(agreementEffectiveEnd(a));
+          return !(end < monthStart || start > monthEnd);
+        });
+        if (!overlapping.length) return; // this specific month isn't covered — keep manual entry
+        const total = overlapping.reduce((s, a) => s + agreementDaysInMonth(a, period), 0);
+        if (!merged[period]) merged[period] = {};
+        merged[period][v.id] = total;
+      });
+    });
+    return merged;
+  }, [occupancy, agreements, vehicles]);
   const [garageMovements, setGarageMovements] = useState([]);
   const [nrmLogs, setNrmLogs] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -3326,6 +3519,7 @@ function App() {
 
   function handlePrintCumulative() {
     setPrintLoanId(null);
+    setPrintFeasibilityId(null);
     setPrintMode('cumulative');
     setActiveTab('full-report');
     setTimeout(() => window.print(), 200);
@@ -3333,6 +3527,7 @@ function App() {
 
   function handlePrint() {
     setPrintLoanId(null);
+    setPrintFeasibilityId(null);
     const prevOrientation = printOrientation;
     if (activeTab === 'quick-review') setPrintMode('quick-review');
     else if (activeTab === 'pnl-compare') setPrintMode('pnl');
@@ -3364,11 +3559,13 @@ function App() {
   }
 
   function handlePrintLoan(loanId) {
+    setPrintFeasibilityId(null);
     setPrintLoanId(loanId);
     setTimeout(() => window.print(), 200);
   }
 
   function handlePrintFeasibilityStudy(studyId) {
+    setPrintLoanId(null);
     setPrintFeasibilityId(studyId);
     setTimeout(() => window.print(), 200);
   }
@@ -3819,13 +4016,13 @@ function App() {
 
         <div className="main-scroll no-print">
           {activeTab === 'pnl-entry' && <PnlEntry monthKeys={monthKeys} lineItems={lineItems} setLineItems={setLineItems} monthlyData={monthlyData} setMonthlyData={setMonthlyData} currency={currency} deletePin={deletePin} period={pnlEntryPeriod} setPeriod={setPnlEntryPeriod} monthlyRemarks={monthlyRemarks} setMonthlyRemarks={setMonthlyRemarks} insurancePolicies={insurancePolicies} insuranceOverrides={insuranceOverrides} setInsuranceOverrides={setInsuranceOverrides} />}
-          {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={occupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} agreements={agreements} garageMovements={garageMovements} nrmLogs={nrmLogs} />}
-          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
+          {activeTab === 'dashboard' && <DashboardPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} vehicleRevenue={vehicleRevenue} defaultUsefulLife={defaultUsefulLife} occupancy={effectiveOccupancy} baseDays={baseDays} widgets={dashboardWidgets} setWidgets={setDashboardWidgets} overdueLoans={overdueLoans} setActiveTab={setActiveTab} agreements={agreements} garageMovements={garageMovements} nrmLogs={nrmLogs} />}
+          {activeTab === 'quick-review' && <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} />}
           {activeTab === 'pnl-compare' && <PnlCompare monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} monthlyRemarks={monthlyRemarks} />}
           {activeTab === 'pnl-statement' && <PnlStatement monthKeys={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} currency={currency} companyName={companyName} viewMode={pnlStatementViewMode} setViewMode={setPnlStatementViewMode} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} orientation={pnlStatementOrientation} setOrientation={setPnlStatementOrientation} />}
-          {activeTab === 'yoy-compare' && <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
-          {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} remarks={occupancyRemarks} setRemarks={setOccupancyRemarks} />}
-          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} onSelectCategory={selectOccCategory} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />}
+          {activeTab === 'yoy-compare' && <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />}
+          {activeTab === 'occ-entry' && <OccEntry monthKeys={monthKeys} vehicles={vehicles} occupancy={occupancy} setOccupancy={setOccupancy} baseDays={baseDays} remarks={occupancyRemarks} setRemarks={setOccupancyRemarks} agreements={agreements} />}
+          {activeTab === 'occ-report' && <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} agreements={agreements} currency={currency} vehicleRevenue={vehicleRevenue} selectedVehicleIds={selectedOccVehicleIds} onToggleVehicleSelect={toggleOccVehicleSelect} onSelectAllVehicles={() => setSelectedOccVehicleIds([])} onSelectCategory={selectOccCategory} reportFrom={reportFrom} setReportFrom={setReportFrom} reportTo={reportTo} setReportTo={setReportTo} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />}
           {activeTab === 'vehicles' && <VehiclesPanel vehicles={vehicles} setVehicles={setVehicles} deletePin={deletePin} currency={currency} />}
           {activeTab === 'sub-lease-data' && <SubLeaseSectionPanel vehicleTypes={vehicleTypes} setVehicleTypes={setVehicleTypes} subLeaseSuppliers={subLeaseSuppliers} setSubLeaseSuppliers={setSubLeaseSuppliers} subLeaseVehicles={subLeaseVehicles} setSubLeaseVehicles={setSubLeaseVehicles} lpoRecords={lpoRecords} setLpoRecords={setLpoRecords} rateCardEntries={rateCardEntries} setRateCardEntries={setRateCardEntries} companyName={companyName} logoDataUrl={logoDataUrl} deletePin={deletePin} tab={subLeaseTab} setTab={setSubLeaseTab} />}
           {activeTab === 'veh-revenue' && <VehRevenueEntry monthKeys={monthKeys} vehicles={vehicles} vehicleRevenue={vehicleRevenue} setVehicleRevenue={setVehicleRevenue} currency={currency} remarks={vehicleRevenueRemarks} setRemarks={setVehicleRevenueRemarks} />}
@@ -3847,7 +4044,7 @@ function App() {
           {activeTab === 'depreciation' && <DepreciationPanel vehicles={vehicles} defaultUsefulLife={defaultUsefulLife} currency={currency} />}
           {activeTab === 'personal-finance' && <PersonalFinancePanel loans={personalLoans} setLoans={setPersonalLoans} cards={personalCards} setCards={setPersonalCards} currency={currency} deletePin={deletePin} />}
           {activeTab === 'settings' && <SettingsPanel companyName={companyName} setCompanyName={setCompanyName} logoDataUrl={logoDataUrl} setLogoDataUrl={setLogoDataUrl} year={year} setYear={setYear} currency={currency} setCurrency={setCurrency} baseDays={baseDays} setBaseDays={setBaseDays} deletePin={deletePin} setDeletePin={setDeletePin} onDownloadBackup={downloadBackup} onRestoreBackup={restoreBackup} onResetLineItems={resetLineItemsToDefault} onReorderLineItems={reorderLineItemsToDefault} onClearPnl={clearAllPnlData} onClearOccupancy={clearAllOccupancyData} users={users} setUsers={setUsers} saveUsersNow={saveUsersNow} />}
-          {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />}
+          {activeTab === 'full-report' && <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />}
         </div>
       </div>
 
@@ -3858,7 +4055,7 @@ function App() {
           <FeasibilityStudyDetailPrint study={feasibilityStudies.find(s => s.id === printFeasibilityId)} companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} />
         ) : printMode === 'quick-review' ? (
           <div style={{ padding: 24 }}>
-            <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+            <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />
           </div>
         ) : printMode === 'pnl' ? (
           <div style={{ padding: 24 }}>
@@ -3884,7 +4081,7 @@ function App() {
         ) : printMode === 'occupancy' ? (
           <div style={{ padding: 24 }}>
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle={`Occupancy Report · ${periodRangeLabel(rangeMonths)}`} />
-            <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+            <OccReport monthKeys={rangeMonths} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />
             <NotesSection rangeMonths={rangeMonths} sources={[{ remarks: occupancyRemarks, label: 'Occupancy Remarks' }, { remarks: vehicleRevenueRemarks, label: 'Vehicle Revenue Remarks' }]} isPrint />
           </div>
         ) : printMode === 'model' ? (
@@ -3901,7 +4098,7 @@ function App() {
         ) : printMode === 'yoy' ? (
           <div style={{ padding: 24 }}>
             <PrintHeader companyName={companyName} logoDataUrl={logoDataUrl} subtitle="Year-over-Year Comparison" />
-            <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+            <YoyComparePanel lineItems={lineItems} monthlyData={monthlyData} currency={currency} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />
           </div>
         ) : printMode === 'fleet-data' ? (
           <div style={{ padding: 24 }}>
@@ -3964,7 +4161,7 @@ function App() {
             <PersonalFinancePanel loans={personalLoans} setLoans={() => {}} cards={personalCards} setCards={() => {}} currency={currency} deletePin={deletePin} />
           </div>
         ) : (
-          <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} monthlyRemarks={monthlyRemarks} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />
+          <FullReport companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} monthlyRemarks={monthlyRemarks} occupancyRemarks={occupancyRemarks} vehicleRevenueRemarks={vehicleRevenueRemarks} />
         )}
       </div>
     </div>
@@ -4012,6 +4209,18 @@ function FeasibilityStudyDetailPrint({ study, currency, companyName, logoDataUrl
         <div className="kpi-card"><div className="label">Required Daily Rate</div><div className="value mono">{fmt(c.requiredDailyRate, currency)}</div></div>
         <div className="kpi-card"><div className="label">Total Market Revenue (Life)</div><div className="value mono">{c.totalMarketRevenue ? fmt(c.totalMarketRevenue, currency) : '—'}</div></div>
       </div>
+      {c.yearlyRevenue.length > 0 && (
+        <div className="panel" style={{ pageBreakInside: 'avoid', breakInside: 'avoid', marginTop: 14 }}>
+          <h3>Market Revenue vs Required — by Year</h3>
+          <FeasibilityRevenueChart yearlyRevenue={c.yearlyRevenue} currency={currency} />
+        </div>
+      )}
+      {c.yearlyRevenue.length > 1 && (
+        <div className="panel" style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+          <h3>Break-Even Outlook</h3>
+          <FeasibilityBreakevenChart yearlyRevenue={c.yearlyRevenue} currency={currency} />
+        </div>
+      )}
       <table style={{ border: '1px solid #ccc', marginTop: 14 }}>
         <thead><tr>{['Occupancy', 'Days/Month', 'Required Monthly Income', 'At Market Rate'].map(h => <th key={h} style={{ border: '1px solid #ccc' }}>{h}</th>)}</tr></thead>
         <tbody>
@@ -4020,6 +4229,10 @@ function FeasibilityStudyDetailPrint({ study, currency, companyName, logoDataUrl
           ))}
         </tbody>
       </table>
+      <div className="panel" style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+        <h3>Occupancy Sensitivity</h3>
+        <FeasibilitySensitivityChart scenarios={c.scenarios} currency={currency} />
+      </div>
       <table style={{ border: '1px solid #ccc', marginTop: 14 }}>
         <tbody><tr><td style={{ border: '1px solid #ccc', padding: 10 }}><b>Verdict:</b> {verdictPhrase}</td></tr></tbody>
       </table>
@@ -5519,13 +5732,29 @@ function NrmLogPanel({ vehicles, nrmLogs, setNrmLogs, deletePin }) {
 }
 
 /* ---------------- Occupancy Entry ---------------- */
-function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, remarks, setRemarks }) {
+function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, remarks, setRemarks, agreements }) {
   const [period, setPeriod] = useState(monthKeys[0]);
   const [search, setSearch] = useState('');
 
   function setDays(vehicleId, value) { setOccupancy(prev => ({ ...prev, [period]: { ...(prev[period] || {}), [vehicleId]: value } })); }
   function fillAll(value) { setOccupancy(prev => { const m = { ...(prev[period] || {}) }; vehicles.forEach(v => { m[v.id] = value; }); return { ...prev, [period]: m }; }); }
   const filtered = vehicles.filter(v => !search || v.name.toLowerCase().includes(search.toLowerCase()) || v.plate.toLowerCase().includes(search.toLowerCase()));
+  // Whichever vehicles have an Agreement overlapping this month use the Agreement-derived
+  // figure in every report instead of whatever's typed here — this tells you that plainly,
+  // rather than leaving the manual number looking authoritative when it silently isn't.
+  const derivedForRow = (v) => {
+    const [y, m] = period.split('-').map(Number);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
+    const overlapping = (agreements || []).filter(a => {
+      if (!a.startDate || !(a.vehicleId === v.id || normalizePlate(a.plate) === normalizePlate(v.plate))) return false;
+      const start = new Date(a.startDate);
+      const end = new Date(agreementEffectiveEnd(a));
+      return !(end < monthStart || start > monthEnd);
+    });
+    if (!overlapping.length) return null;
+    return overlapping.reduce((s, a) => s + agreementDaysInMonth(a, period), 0);
+  };
 
   if (vehicles.length === 0) return <div className="empty-state"><h2>Add vehicles first</h2><p>Go to the Vehicles tab to add your fleet.</p></div>;
 
@@ -5537,16 +5766,21 @@ function OccEntry({ monthKeys, vehicles, occupancy, setOccupancy, baseDays, rema
         <button className="btn small" onClick={() => fillAll(baseDays)}>Mark all fully worked ({baseDays}d)</button>
         <button className="btn small" onClick={() => fillAll(0)}>Mark all as 0 days</button>
       </div>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6, marginBottom: 10 }}>A vehicle with an Agreement covering this month uses the Agreement-derived day count in every report automatically — shown alongside as a check, even though you can still type a value here.</p>
       <table>
         <thead><tr><th>S.No</th><th>Vehicle</th><th>Model Year</th><th>Plate</th><th className="num">Days Worked</th><th className="num">Occupancy %</th></tr></thead>
         <tbody>
           {filtered.map((v, i) => {
             const d = (occupancy[period] || {})[v.id];
             const pctVal = d !== undefined && d !== '' ? num(d) / baseDays : null;
+            const derived = derivedForRow(v);
             return (
               <tr key={v.id}>
                 <td>{i + 1}</td><td>{v.name}</td><td>{v.modelYear || '—'}</td><td>{v.plate}</td>
-                <td className="num"><input type="number" min="0" value={d === undefined ? '' : d} onChange={e => setDays(v.id, e.target.value)} /></td>
+                <td className="num">
+                  <input type="number" min="0" value={d === undefined ? '' : d} onChange={e => setDays(v.id, e.target.value)} />
+                  {derived !== null && <div style={{ fontSize: 10.5, color: 'var(--steel)', marginTop: 2 }}>🔗 Agreements: {derived}d used in reports</div>}
+                </td>
                 <td className="num">{pctVal === null ? '—' : <span className={`badge ${pctVal >= 0.5 ? 'pos' : 'neg'}`}>{pctStr(pctVal)}</span>}</td>
               </tr>
             );
@@ -6125,8 +6359,243 @@ function ModelComparePanel({ rangeMonths, vehicles, vehicleRevenue, defaultUsefu
 
 /* ---------------- Feasibility Study ---------------- */
 
+// Feasibility Study charts — built as their own presentation-quality components (gradient
+// fills, soft shadows, larger value labels, an "insight" caption under each) rather than
+// reusing the plain shared chart components, since these are meant to be shown to an investor
+// rather than blend in with the rest of the app's utilitarian reporting tables.
+function FeasibilityRevenueChart({ yearlyRevenue, currency }) {
+  const gid = useRef('fc' + Math.random().toString(36).slice(2)).current;
+  const data = yearlyRevenue;
+  const rawMax = Math.max(1, ...data.flatMap(y => [y.revenue, y.requiredRevenue]));
+  const niceMax = niceAxisMax(rawMax);
+  const gridLines = 4;
+  const barWidth = 26;
+  const barGap = 6;
+  const groupGap = 34;
+  const groupWidth = barWidth * 2 + barGap;
+  const axisLeft = 56;
+  const axisBottom = 30;
+  const plotHeight = 220;
+  const plotWidth = Math.max(260, data.length * (groupWidth + groupGap));
+  const totalWidth = axisLeft + plotWidth + 16;
+  const totalHeight = plotHeight + axisBottom + 20;
+  const yearsAhead = data.filter(y => y.revenue >= y.requiredRevenue).length;
+  const insight = data.length === 0 ? '' :
+    yearsAhead === data.length ? `Market revenue meets or exceeds the required rate in every year of this vehicle's life.` :
+    yearsAhead === 0 ? `Market revenue falls short of the required rate in every year — this vehicle does not cover its costs at current rates.` :
+    `Market revenue covers the required rate in ${yearsAhead} of ${data.length} years.`;
+
+  return (
+    <div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg width={totalWidth} height={totalHeight} style={{ minWidth: totalWidth }}>
+          <defs>
+            <linearGradient id={`${gid}-req`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#C9BCA8" /><stop offset="100%" stopColor="#E4DACB" />
+            </linearGradient>
+            <linearGradient id={`${gid}-good`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4CAF7D" /><stop offset="100%" stopColor="#2D7A57" />
+            </linearGradient>
+            <linearGradient id={`${gid}-bad`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#E0836B" /><stop offset="100%" stopColor="#C1503F" />
+            </linearGradient>
+            <filter id={`${gid}-shadow`} x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#1D2330" floodOpacity="0.18" />
+            </filter>
+          </defs>
+          {Array.from({ length: gridLines + 1 }).map((_, gi) => {
+            const val = (niceMax / gridLines) * gi;
+            const y = plotHeight - (val / niceMax) * plotHeight + 8;
+            return (
+              <g key={gi}>
+                <line x1={axisLeft} y1={y} x2={totalWidth - 4} y2={y} stroke="#ECEEE8" strokeWidth="1" />
+                <text x={axisLeft - 10} y={y + 3.5} fontSize="10.5" fill="#8790A0" textAnchor="end">{fmtCompact(val)}</text>
+              </g>
+            );
+          })}
+          {data.map((y, i) => {
+            const groupX = axisLeft + i * (groupWidth + groupGap) + groupGap / 2;
+            const reqH = Math.max(1.5, (y.requiredRevenue / niceMax) * plotHeight);
+            const revH = Math.max(1.5, (y.revenue / niceMax) * plotHeight);
+            const good = y.revenue >= y.requiredRevenue;
+            return (
+              <g key={i}>
+                <rect x={groupX} y={plotHeight - reqH + 8} width={barWidth} height={reqH} fill={`url(#${gid}-req)`} rx="4" filter={`url(#${gid}-shadow)`} />
+                <text x={groupX + barWidth / 2} y={plotHeight - reqH + 2} fontSize="9.5" fontWeight="700" fill="#8A7B5E" textAnchor="middle">{fmtCompact(y.requiredRevenue)}</text>
+                <rect x={groupX + barWidth + barGap} y={plotHeight - revH + 8} width={barWidth} height={revH} fill={`url(#${gid}-${good ? 'good' : 'bad'})`} rx="4" filter={`url(#${gid}-shadow)`} />
+                <text x={groupX + barWidth + barGap + barWidth / 2} y={plotHeight - revH + 2} fontSize="9.5" fontWeight="700" fill={good ? '#2D7A57' : '#C1503F'} textAnchor="middle">{fmtCompact(y.revenue)}</text>
+                <text x={groupX + groupWidth / 2} y={plotHeight + 24} fontSize="11" fontWeight="600" fill="#4E5D78" textAnchor="middle">Year {y.year}{y.extrapolated ? '*' : ''}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6, fontSize: 11.5, color: 'var(--muted)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'linear-gradient(180deg,#C9BCA8,#E4DACB)' }} /> Required Revenue</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'linear-gradient(180deg,#4CAF7D,#2D7A57)' }} /> Market Revenue (on target)</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'linear-gradient(180deg,#E0836B,#C1503F)' }} /> Market Revenue (short)</span>
+        {data.some(y => y.extrapolated) && <span>* extrapolated at the lowest Year 1–3 rate</span>}
+      </div>
+      {insight && <p style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 7, padding: '8px 12px', marginTop: 10 }}>💡 {insight}</p>}
+    </div>
+  );
+}
+
+function FeasibilityBreakevenChart({ yearlyRevenue, currency }) {
+  const gid = useRef('bc' + Math.random().toString(36).slice(2)).current;
+  let cumMarket = 0, cumRequired = 0;
+  const points = yearlyRevenue.map(y => {
+    cumMarket += y.revenue; cumRequired += y.requiredRevenue;
+    return { year: y.year, cumMarket, cumRequired };
+  });
+  if (points.length === 0) return null;
+  const rawMax = Math.max(1, ...points.flatMap(p => [p.cumMarket, p.cumRequired]));
+  const niceMax = niceAxisMax(rawMax);
+  const width = Math.max(320, points.length * 90);
+  const height = 220;
+  const axisLeft = 60, axisBottom = 26, padTop = 16;
+  const plotW = width - axisLeft - 16;
+  const plotH = height - axisBottom - padTop;
+  const xFor = (i) => axisLeft + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const yFor = (v) => padTop + plotH - (v / niceMax) * plotH;
+
+  // Find the breakeven point — the first year cumulative market revenue reaches or exceeds
+  // cumulative required revenue — by linear interpolation between the two surrounding points
+  // for a more honest "when," rather than just snapping to a whole year.
+  let breakevenYear = null;
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].cumMarket >= points[i].cumRequired) {
+      if (i === 0) { breakevenYear = 1; break; }
+      const prev = points[i - 1];
+      const gapPrev = prev.cumRequired - prev.cumMarket;
+      const gapNow = points[i].cumMarket - points[i].cumRequired;
+      const frac = gapPrev / (gapPrev + gapNow || 1);
+      breakevenYear = prev.year + frac;
+      break;
+    }
+  }
+  const marketPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i)} ${yFor(p.cumMarket)}`).join(' ');
+  const requiredPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xFor(i)} ${yFor(p.cumRequired)}`).join(' ');
+  const areaPath = `${marketPath} L ${xFor(points.length - 1)} ${padTop + plotH} L ${xFor(0)} ${padTop + plotH} Z`;
+
+  return (
+    <div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg width={width} height={height} style={{ minWidth: width }}>
+          <defs>
+            <linearGradient id={`${gid}-area`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#3E9C6E" stopOpacity="0.28" /><stop offset="100%" stopColor="#3E9C6E" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {Array.from({ length: 4 + 1 }).map((_, gi) => {
+            const val = (niceMax / 4) * gi;
+            const y = yFor(val);
+            return (
+              <g key={gi}>
+                <line x1={axisLeft} y1={y} x2={width - 4} y2={y} stroke="#ECEEE8" strokeWidth="1" />
+                <text x={axisLeft - 10} y={y + 3.5} fontSize="10.5" fill="#8790A0" textAnchor="end">{fmtCompact(val)}</text>
+              </g>
+            );
+          })}
+          <path d={areaPath} fill={`url(#${gid}-area)`} />
+          <path d={requiredPath} fill="none" stroke="#B79F7E" strokeWidth="2.5" strokeDasharray="6,4" strokeLinejoin="round" />
+          <path d={marketPath} fill="none" stroke="#2D7A57" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+          {points.map((p, i) => (
+            <g key={i}>
+              <circle cx={xFor(i)} cy={yFor(p.cumRequired)} r="3" fill="#B79F7E" stroke="#fff" strokeWidth="1" />
+              <circle cx={xFor(i)} cy={yFor(p.cumMarket)} r="3.5" fill="#2D7A57" stroke="#fff" strokeWidth="1.5" />
+              <text x={xFor(i)} y={yFor(p.cumMarket) - 10} fontSize="10" fontWeight="700" fill="#2D7A57" textAnchor="middle">{fmtCompact(p.cumMarket)}</text>
+              <text x={xFor(i)} y={height - 6} fontSize="11" fontWeight="600" fill="#4E5D78" textAnchor="middle">Year {p.year}</text>
+            </g>
+          ))}
+          {breakevenYear !== null && breakevenYear <= points[points.length - 1].year && (
+            <g>
+              <line x1={axisLeft + ((breakevenYear - 1) / Math.max(1, points.length - 1)) * plotW} y1={padTop} x2={axisLeft + ((breakevenYear - 1) / Math.max(1, points.length - 1)) * plotW} y2={padTop + plotH} stroke="#2D7A57" strokeWidth="1" strokeDasharray="3,3" opacity="0.6" />
+            </g>
+          )}
+        </svg>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6, fontSize: 11.5, color: 'var(--muted)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 16, height: 3, background: '#2D7A57', display: 'inline-block', borderRadius: 2 }} /> Cumulative Market Revenue</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 16, height: 3, background: '#B79F7E', display: 'inline-block', borderRadius: 2 }} /> Cumulative Required Revenue</span>
+      </div>
+      <p style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F7F8F5', border: '1px solid var(--line)', borderRadius: 7, padding: '8px 12px', marginTop: 10 }}>
+        💡 {breakevenYear === null
+          ? `This vehicle is not projected to break even within its ${points[points.length - 1].year}-year useful life at current rates.`
+          : breakevenYear <= 1
+          ? `This vehicle is projected to cover its cumulative required revenue from Year 1 onward.`
+          : `Break-even is projected around Year ${breakevenYear.toFixed(1)} — after that point, cumulative market revenue covers the cumulative required revenue.`}
+      </p>
+    </div>
+  );
+}
+
+function FeasibilitySensitivityChart({ scenarios, currency }) {
+  const gid = useRef('sc' + Math.random().toString(36).slice(2)).current;
+  const rawMax = Math.max(1, ...scenarios.flatMap(s => [s.requiredAmount, s.marketAmount || 0]));
+  const niceMax = niceAxisMax(rawMax);
+  const barWidth = 26, barGap = 6, groupGap = 40;
+  const groupWidth = barWidth * 2 + barGap;
+  const axisLeft = 56, axisBottom = 34, plotHeight = 190;
+  const plotWidth = Math.max(260, scenarios.length * (groupWidth + groupGap));
+  const totalWidth = axisLeft + plotWidth + 16;
+  const totalHeight = plotHeight + axisBottom + 16;
+
+  return (
+    <div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg width={totalWidth} height={totalHeight} style={{ minWidth: totalWidth }}>
+          <defs>
+            <linearGradient id={`${gid}-req`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#C9BCA8" /><stop offset="100%" stopColor="#E4DACB" />
+            </linearGradient>
+            <linearGradient id={`${gid}-mkt`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4A90B8" /><stop offset="100%" stopColor="#2D6E8E" />
+            </linearGradient>
+          </defs>
+          {Array.from({ length: 5 }).map((_, gi) => {
+            const val = (niceMax / 4) * gi;
+            const y = plotHeight - (val / niceMax) * plotHeight + 8;
+            return (
+              <g key={gi}>
+                <line x1={axisLeft} y1={y} x2={totalWidth - 4} y2={y} stroke="#ECEEE8" strokeWidth="1" />
+                <text x={axisLeft - 10} y={y + 3.5} fontSize="10.5" fill="#8790A0" textAnchor="end">{fmtCompact(val)}</text>
+              </g>
+            );
+          })}
+          {scenarios.map((s, i) => {
+            const groupX = axisLeft + i * (groupWidth + groupGap) + groupGap / 2;
+            const reqH = Math.max(1.5, (s.requiredAmount / niceMax) * plotHeight);
+            const mktH = Math.max(1.5, ((s.marketAmount || 0) / niceMax) * plotHeight);
+            return (
+              <g key={i}>
+                <rect x={groupX} y={plotHeight - reqH + 8} width={barWidth} height={reqH} fill={`url(#${gid}-req)`} rx="4" />
+                <text x={groupX + barWidth / 2} y={plotHeight - reqH + 2} fontSize="9.5" fontWeight="700" fill="#8A7B5E" textAnchor="middle">{fmtCompact(s.requiredAmount)}</text>
+                <rect x={groupX + barWidth + barGap} y={plotHeight - mktH + 8} width={barWidth} height={mktH} fill={`url(#${gid}-mkt)`} rx="4" />
+                <text x={groupX + barWidth + barGap + barWidth / 2} y={plotHeight - mktH + 2} fontSize="9.5" fontWeight="700" fill="#2D6E8E" textAnchor="middle">{fmtCompact(s.marketAmount || 0)}</text>
+                <text x={groupX + groupWidth / 2} y={plotHeight + 22} fontSize="11" fontWeight="600" fill="#4E5D78" textAnchor="middle">{(s.occPct * 100).toFixed(0)}% Occupancy</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6, fontSize: 11.5, color: 'var(--muted)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'linear-gradient(180deg,#C9BCA8,#E4DACB)' }} /> Required (monthly)</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 11, height: 11, borderRadius: 3, background: 'linear-gradient(180deg,#4A90B8,#2D6E8E)' }} /> At Market Rate (monthly)</span>
+      </div>
+    </div>
+  );
+}
+
+
 function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWorkingDays, onPrintStudy }) {
   const [selectedId, setSelectedId] = useState(studies[0] ? studies[0].id : null);
+  const [showPlanner, setShowPlanner] = useState(false);
+  // 3.6725 is the AED's actual official peg rate to the US Dollar — a sensible default that's
+  // exactly right for USD and just a starting point to edit for any other currency.
+  const [plannerCurrency, setPlannerCurrency] = useState('USD');
+  const [plannerAmount, setPlannerAmount] = useState('');
+  const [plannerRate, setPlannerRate] = useState('3.6725');
 
   function addStudy() {
     const s = emptyFeasibilityStudy();
@@ -6148,11 +6617,75 @@ function FeasibilityPanel({ studies, setStudies, currency, deletePin, defaultWor
     setStudies(studies.map(s => s.id === id ? { ...s, ...patch } : s));
   }
 
+  // Investor Budget Planner — converts a foreign-currency budget to AED, then shows how many
+  // units of EACH saved Feasibility Study's vehicle that budget affords, with the resulting
+  // fleet-wide required and projected market revenue scaled accordingly. Purely a planning
+  // view: it doesn't create or change any actual vehicle, agreement, or study data.
+  const budgetAED = num(plannerAmount) * num(plannerRate);
+  const plannerRows = studies
+    .filter(s => num(s.totalPrice) > 0)
+    .map(s => {
+      const c = computeFeasibility(s);
+      const unitsAffordable = Math.floor(budgetAED / num(s.totalPrice));
+      const totalSpent = unitsAffordable * num(s.totalPrice);
+      return {
+        study: s, c, unitsAffordable, totalSpent, remaining: budgetAED - totalSpent,
+        projectedRequired: unitsAffordable * c.grandTotal,
+        projectedMarketRevenue: unitsAffordable * c.totalMarketRevenue,
+      };
+    })
+    .sort((a, b) => b.projectedMarketRevenue - a.projectedMarketRevenue);
+  const bestRowId = plannerRows.length && plannerRows[0].unitsAffordable > 0 ? plannerRows[0].study.id : null;
+
   const selected = studies.find(s => s.id === selectedId);
   const verdictColor = (v) => v === 'Feasible' ? '#3E9C6E' : v === 'Marginal' ? '#D98E3F' : v === 'Not Feasible' ? '#C1503F' : '#6B7380';
 
   return (
     <div>
+      <div className="panel no-print">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0 }}>💰 Investor Budget Planner</h3>
+            <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 0' }}>How many of each saved study's vehicle a foreign-currency budget affords, converted to {currency}.</p>
+          </div>
+          <button className="btn" onClick={() => setShowPlanner(!showPlanner)}>{showPlanner ? 'Hide' : 'Open Planner'}</button>
+        </div>
+        {showPlanner && (
+          <div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 14, alignItems: 'flex-end' }}>
+              <div className="field" style={{ flex: '1 1 100px', maxWidth: 120 }}><label>Currency</label><input value={plannerCurrency} onChange={e => setPlannerCurrency(e.target.value.toUpperCase())} placeholder="USD" /></div>
+              <div className="field" style={{ flex: '1 1 160px' }}><label>Budget ({plannerCurrency || 'Foreign'})</label><input type="number" value={plannerAmount} onChange={e => setPlannerAmount(e.target.value)} placeholder="e.g. 2000000" /></div>
+              <div className="field" style={{ flex: '1 1 140px' }}><label>Exchange Rate ({currency} per {plannerCurrency || 'unit'})</label><input type="number" value={plannerRate} onChange={e => setPlannerRate(e.target.value)} /></div>
+              <div className="field" style={{ flex: '1 1 160px' }}><label>Budget in {currency}</label><input disabled value={fmt(budgetAED, currency)} style={{ fontWeight: 700 }} /></div>
+            </div>
+            {plannerRows.length === 0 ? (
+              <p style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 12 }}>Save at least one Feasibility Study with a Total Price set to compare options here.</p>
+            ) : (
+              <div style={{ overflowX: 'auto', marginTop: 12 }}>
+                <table>
+                  <thead><tr><th>Study / Vehicle</th><th className="num">Price / Unit</th><th className="num">Units Affordable</th><th className="num">Total Spent</th><th className="num">Remaining</th><th className="num">Projected Required (life)</th><th className="num">Projected Market Revenue (life)</th><th>Verdict</th></tr></thead>
+                  <tbody>
+                    {plannerRows.map(r => (
+                      <tr key={r.study.id} style={{ background: r.study.id === bestRowId ? '#EAF5EE' : undefined }}>
+                        <td>{r.study.name}{r.study.id === bestRowId && <span className="badge pos" style={{ marginLeft: 6, fontSize: 10 }}>Best Fit</span>}</td>
+                        <td className="num">{fmt(r.study.totalPrice, currency)}</td>
+                        <td className="num">{r.unitsAffordable}</td>
+                        <td className="num">{fmt(r.totalSpent, currency)}</td>
+                        <td className="num">{fmt(r.remaining, currency)}</td>
+                        <td className="num">{r.unitsAffordable ? fmt(r.projectedRequired, currency) : '—'}</td>
+                        <td className="num">{r.unitsAffordable ? fmt(r.projectedMarketRevenue, currency) : '—'}</td>
+                        <td>{r.unitsAffordable ? <span className="badge" style={{ background: (r.c.verdict === 'Feasible' ? '#3E9C6E' : r.c.verdict === 'Marginal' ? '#D98E3F' : '#C1503F') + '20', color: r.c.verdict === 'Feasible' ? '#3E9C6E' : r.c.verdict === 'Marginal' ? '#D98E3F' : '#C1503F' }}>{r.c.verdict}</span> : <span style={{ color: 'var(--muted)' }}>Budget too small</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>Ranked by projected total market revenue over the vehicle's life at full fleet size. This is a planning view only — it doesn't create vehicles, agreements, or change any saved study.</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0 }}>Saved Feasibility Studies</h3>
@@ -6234,9 +6767,24 @@ function FeasibilityDetail({ study, onChange, currency }) {
           </div>
         </div>
 
+        {c.yearlyRevenue.length > 0 && (
+          <div className="panel">
+            <h3>Market Revenue vs Required — by Year</h3>
+            <FeasibilityRevenueChart yearlyRevenue={c.yearlyRevenue} currency={currency} />
+          </div>
+        )}
+
+        {c.yearlyRevenue.length > 1 && (
+          <div className="panel">
+            <h3>Break-Even Outlook</h3>
+            <FeasibilityBreakevenChart yearlyRevenue={c.yearlyRevenue} currency={currency} />
+          </div>
+        )}
+
         <div className="panel">
           <h3>Occupancy Scenarios</h3>
-          <table>
+          <FeasibilitySensitivityChart scenarios={c.scenarios} currency={currency} />
+          <table style={{ marginTop: 14 }}>
             <thead><tr><th>Occupancy</th><th className="num">Days / Month</th><th className="num">Required Monthly Income</th><th className="num">At Market Rate</th></tr></thead>
             <tbody>
               {c.scenarios.map((s, i) => (
@@ -7076,6 +7624,15 @@ function VehiclesPanel({ vehicles, setVehicles, deletePin, currency }) {
               );
             })}
             {filtered.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--muted)', padding: 20 }}>No vehicles yet.</td></tr>}
+            {filtered.length > 0 && (
+              <tr className="net-row">
+                <td colSpan={6}>Total ({filtered.filter(v => !v.saleDate).length} Active, {filtered.filter(v => v.saleDate).length} Sold)</td>
+                <td></td>
+                <td className="num">{fmt(filtered.reduce((s, v) => s + num(v.purchaseValue), 0), currency)}</td>
+                <td></td>
+                <td></td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -9656,7 +10213,7 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
           <h3>Idle Vehicles — Days Since Last Rental</h3>
           <p style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--steel)', marginTop: -4, marginBottom: 4 }}>Current Fleet Status – As of – {ddmmyyyy(todayStr())}</p>
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -2 }}>Independent of the Report Period selected above; for past months, use the Occupancy Report instead.</p>
-          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Based on the last closed Agreement, or the last Garage release date if that's more recent — whichever means the car became genuinely available last. For vehicles tracked only through Occupancy Entry, "Est." shows an approximate date.</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: -6 }}>Based on the last closed Agreement, or the last Garage release date if that's more recent — whichever means the car became genuinely available last.</p>
           <table>
             <thead><tr><th style={{ width: 40 }}>S.No</th><th>Vehicle</th><th className="num">Idle Days</th><th className="num">Idle Since</th><th>Last Garage/Workshop Stay</th></tr></thead>
             <tbody>
@@ -9664,8 +10221,8 @@ function DashboardPanel({ companyName, logoDataUrl, currency, rangeMonths, lineI
                 <tr key={vehicle.id}>
                   <td>{i + 1}</td>
                   <td>{vehicle.name} ({vehicle.plate})</td>
-                  <td className="num">{idle ? <span className={`badge ${idle.days > 14 ? 'neg' : 'pos'}`}>{idle.days} day{idle.days === 1 ? '' : 's'}</span> : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
-                  <td className="num">{idle ? (idle.source === 'occupancy' ? 'Est. ' : '') + fullDateLabel(idle.lastCloseDate) : '—'}</td>
+                  <td className="num">{idle ? `${idle.days} day${idle.days === 1 ? '' : 's'}` : <span style={{ color: 'var(--muted)' }}>No rental history</span>}</td>
+                  <td className="num">{idle ? fullDateLabel(idle.lastCloseDate) : '—'}</td>
                   <td>{garageStay ? `${garageStay.days} day${garageStay.days === 1 ? '' : 's'} (${fullDateLabel(garageStay.inDate)} – ${fullDateLabel(garageStay.outDate)})` : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                 </tr>
               ))}
@@ -9836,7 +10393,7 @@ function FullReport({ companyName, logoDataUrl, currency, rangeMonths, lineItems
 
   return (
     <div style={{ padding: 24 }}>
-      <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={occupancy} baseDays={baseDays} />
+      <QuickReviewPanel companyName={companyName} logoDataUrl={logoDataUrl} currency={currency} rangeMonths={rangeMonths} lineItems={lineItems} monthlyData={monthlyData} vehicles={vehicles} occupancy={effectiveOccupancy} baseDays={baseDays} />
       <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--line)' }} />
       <h1 style={{ fontSize: 22 }}>{companyName}</h1>
       <p style={{ color: 'var(--muted)', marginTop: 4 }}>Budget vs Actual &amp; Occupancy Report · {periodRangeLabel(rangeMonths)}</p>
